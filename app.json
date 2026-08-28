@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "나만의 운동 기록",
+    "slug": "my-workout-tracker",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F7F4F2"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.lucent.workouttracker",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "헬스장 근접 알림을 위해 위치 정보가 필요합니다.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "앱이 백그라운드에 있을 때도 헬스장 도착 알림을 받기 위해 위치 정보가 필요합니다.",
+        "NSPhotoLibraryUsageDescription": "오운완 인증샷을 저장하고 불러오기 위해 사진첩 접근 권한이 필요합니다.",
+        "NSCameraUsageDescription": "인증샷을 직접 촬영하기 위해 카메라 접근 권한이 필요합니다."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#F7F4F2"
+      },
+      "package": "com.lucent.workouttracker",
+      "permissions": [
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.RECORD_AUDIO"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-location",
+      "expo-image-picker"
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ce8725f1-25b7-4d59-b2de-69d134ff9787"
+      }
+    }
+  }
+}
