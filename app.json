@@ -47,7 +47,14 @@
     },
     "plugins": [
       "expo-location",
-      "expo-image-picker"
+      "expo-image-picker",
+      "expo-build-properties"
+	{
+          "android": {
+            "enableProguardInReleaseBuilds": false,
+            "kotlinVersion": "1.9.24"
+          }
+        }
     ],
     "extra": {
       "eas": {
