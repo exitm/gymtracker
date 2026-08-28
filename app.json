@@ -45,16 +45,18 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
+"plugins": [
       "expo-location",
       "expo-image-picker",
-      "expo-build-properties"
-	{
+      [
+        "expo-build-properties",
+        {
           "android": {
             "enableProguardInReleaseBuilds": false,
             "kotlinVersion": "1.9.24"
           }
         }
+      ]
     ],
     "extra": {
       "eas": {
