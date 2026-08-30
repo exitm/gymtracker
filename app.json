@@ -32,10 +32,17 @@
         "expo-build-properties",
         {
           "android": {
-            "enableProguardInReleaseBuilds": false
+            "enableProguardInReleaseBuilds": false,
+            "enableMinifyInReleaseBuilds": false
           }
         }
       ]
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "ce8725f1-25b7-4d59-b2de-69d134ff9787"
+      }
+    },
+    "owner": "lota1"
   }
 }
