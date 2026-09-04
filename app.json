@@ -1,24 +1,30 @@
 {
   "expo": {
-    "name": "gymtracker-clean",
+    "name": "내 운동기록",
     "slug": "gymtracker-clean",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/splash-1.jpg",
     "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/splash-1.jpg",
+      "resizeMode": "contain",
+      "backgroundColor": "#5333ED"
+    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
-      }
+        "foregroundImage": "./assets/splash-1.jpg",
+        "backgroundColor": "#5333ED"
+      },
+      "package": "com.lota1.gymtrackerclean"
     },
-    "web": {
-      "favicon": "./assets/favicon.png"
+    "extra": {
+      "eas": {
+        "projectId": "c65030f8-f9a5-4ce2-b255-8048ae305dc1"
+      }
     }
   }
 }
