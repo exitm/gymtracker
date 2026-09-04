@@ -3,14 +3,22 @@ import React, { useState, useCallback, useRef } from 'react';
 import { View, Text, StyleSheet, TextInput, Switch, ScrollView, TouchableOpacity, Modal, FlatList, DeviceEventEmitter } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons'; 
-import * as FileSystem from 'expo-file-system/legacy';
+
+// 🌟 에러를 일으키는 최신 File API를 지우고, 백업(저장) 용도로 가장 안정적인 legacy만 남깁니다.
+import * as FileSystem from 'expo-file-system/legacy'; 
+
 import * as Sharing from 'expo-sharing';
 import * as Location from 'expo-location';
 import * as DocumentPicker from 'expo-document-picker';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage'; 
 
-import { getSettings, updateSetting, updateProfile, getAllTemplates, setActiveTemplate, saveNewRoutineTemplate, getRoutineTemplateById, updateRoutineTemplate, deleteRoutineTemplate, restoreSettingsAndTemplates } from '../dbQueries';
+import { 
+  getSettings, updateSetting, updateProfile, getAllTemplates, setActiveTemplate, 
+  saveNewRoutineTemplate, getRoutineTemplateById, updateRoutineTemplate, 
+  deleteRoutineTemplate, restoreSettingsAndTemplates,
+  exportWorkoutLogsJSON, restoreWorkoutLogsJSON 
+} from '../dbQueries';
 import PolicyModal from '../components/PolicyModal'; 
 
 const GEOFENCING_TASK = 'GYM_GEOFENCING_TASK';
@@ -29,8 +37,8 @@ export default function SettingsScreen() {
   const insets = useSafeAreaInsets(); 
 
   const [name, setName] = useState('사용자');
-  const [height, setHeight] = useState(171);
-  const [weight, setWeight] = useState(65);
+  const [height, setHeight] = useState('171');
+  const [weight, setWeight] = useState('65');
   const [weeklyGoal, setWeeklyGoal] = useState(5);
   const [waterGoal, setWaterGoal] = useState(700); 
 
@@ -64,15 +72,13 @@ export default function SettingsScreen() {
 
   const loadData = async () => {
     const data = await getSettings();
-    
-    // DB에서 값을 못 가져오는 경우를 대비해 AsyncStorage를 보조로 사용
     const savedName = await AsyncStorage.getItem('userName');
     const savedHeight = await AsyncStorage.getItem('userHeight');
     const savedWeight = await AsyncStorage.getItem('userWeight');
 
     setName(savedName || data.user_name || '사용자');
-    setHeight(savedHeight ? parseInt(savedHeight) : (data.height > 0 ? data.height : 171));
-    setWeight(savedWeight ? parseInt(savedWeight) : (data.weight > 0 ? data.weight : 65));
+    setHeight(savedHeight || (data.height > 0 ? data.height.toString() : '171'));
+    setWeight(savedWeight || (data.weight > 0 ? data.weight.toString() : '65'));
     
     setWeeklyGoal(data.weekly_goal > 0 ? data.weekly_goal : 5);
     setWaterGoal(data.water_goal > 0 ? data.water_goal : 700);
@@ -85,28 +91,46 @@ export default function SettingsScreen() {
   };
 
   const checkGeofencingStatus = async () => {
-    const isRegistered = await Location.hasStartedGeofencingAsync(GEOFENCING_TASK);
-    setIsGeofencingActive(isRegistered);
+    try {
+      const { status } = await Location.getBackgroundPermissionsAsync();
+      if (status === 'granted') {
+        const isRegistered = await Location.hasStartedGeofencingAsync(GEOFENCING_TASK);
+        setIsGeofencingActive(isRegistered);
+      } else {
+        setIsGeofencingActive(false);
+      }
+    } catch (error) {
+      console.log('지오펜싱 상태 확인 건너뜀 (권한 없음):', error);
+      setIsGeofencingActive(false);
+    }
   };
 
   const handleRegisterGymLocation = async () => {
-    let { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== 'granted') return showAlert('권한 필요', '위치 정보 접근 권한이 필요합니다.', 'info');
-    let backStatus = await Location.requestBackgroundPermissionsAsync();
-    if (backStatus.status !== 'granted') return showAlert('권한 필요', '앱을 껐을 때도 알림을 받으려면 설정에서 위치 권한을 "항상 허용"으로 변경해주세요.', 'info');
-
     try {
+      let { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') return showAlert('권한 필요', '위치 정보 접근 권한이 필요합니다.', 'info');
+      
+      let backStatus = await Location.requestBackgroundPermissionsAsync();
+      if (backStatus.status !== 'granted') return showAlert('권한 필요', '앱을 껐을 때도 알림을 받으려면 설정에서 위치 권한을 "항상 허용"으로 변경해주세요.', 'info');
+
       showAlert('위치 탐색 중', '현재 위치를 탐색하고 있습니다.\n잠시만 기다려 주세요.', 'info', null, false);
       let location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const lat = location.coords.latitude; const lng = location.coords.longitude;
-      await updateSetting('gym_lat', lat); await updateSetting('gym_lng', lng);
-      setGymLat(lat); setGymLng(lng);
+      const lat = location.coords.latitude; 
+      const lng = location.coords.longitude;
+      
+      await updateSetting('gym_lat', lat); 
+      await updateSetting('gym_lng', lng);
+      setGymLat(lat); 
+      setGymLng(lng);
+      
       await Location.startGeofencingAsync(GEOFENCING_TASK, [{
         identifier: 'MyGym', latitude: lat, longitude: lng, radius: 50, notifyOnEnter: true, notifyOnExit: true,
       }]);
       setIsGeofencingActive(true);
-      showAlert('등록 완료', '현재 위치가 내 헬스장으로 등록되었습니다! 이제 50m 반경에 들어오고 나갈 때 알림을 보내드립니다.', 'info');
-    } catch (error) { showAlert('오류', '위치를 가져오거나 지오펜싱을 설정하는데 실패했습니다.', 'info'); }
+      showAlert('등록 완료', '현재 위치가 내 헬스장으로 등록되었습니다!', 'info');
+    } catch (error) { 
+      showAlert('오류', '위치를 가져오거나 지오펜싱을 설정하는데 실패했습니다.', 'info'); 
+    }
   };
 
   const handleStopGeofencing = async () => {
@@ -120,27 +144,21 @@ export default function SettingsScreen() {
 
   const handleSaveProfile = async () => {
     if (!name.trim()) return showAlert('입력 확인', '이름을 입력해 주세요.', 'info');
-    
-    // 1. 기존 SQLite 업데이트
-    await updateProfile(name.trim(), height, weight); 
-    
-    // 2. 초기화 방지를 위한 보조 저장소 업데이트
+    const numHeight = parseInt(height) || 171;
+    const numWeight = parseInt(weight) || 65;
+    await updateProfile(name.trim(), numHeight, numWeight); 
     await AsyncStorage.setItem('userName', name.trim());
-    await AsyncStorage.setItem('userHeight', height.toString());
-    await AsyncStorage.setItem('userWeight', weight.toString());
-    
+    await AsyncStorage.setItem('userHeight', numHeight.toString());
+    await AsyncStorage.setItem('userWeight', numWeight.toString());
     showAlert('저장 완료', '프로필 정보가 저장되었습니다.', 'info');
-    loadData(); // 저장 후 새로고침
+    loadData(); 
   };
 
   const handleToggle = async (key, currentValue, setFunction) => {
     const newValue = !currentValue; 
     setFunction(newValue); 
     await updateSetting(key, newValue ? 1 : 0);
-
-    if (key === 'is_dark_mode') {
-      DeviceEventEmitter.emit('themeChanged', newValue);
-    }
+    if (key === 'is_dark_mode') DeviceEventEmitter.emit('themeChanged', newValue);
   };
 
   const adjustWeeklyGoal = async (step) => {
@@ -153,36 +171,59 @@ export default function SettingsScreen() {
     setWaterGoal(newVal); await updateSetting('water_goal', newVal); 
   };
 
-  const adjustHeight = (step) => { let newVal = height + step; if (newVal < 50) newVal = 50; setHeight(newVal); };
-  const adjustWeight = (step) => { let newVal = weight + step; if (newVal < 20) newVal = 20; setWeight(newVal); };
+  const adjustHeight = (step) => { let newVal = (parseInt(height) || 171) + step; if (newVal < 50) newVal = 50; setHeight(newVal.toString()); };
+  const adjustWeight = (step) => { let newVal = (parseInt(weight) || 65) + step; if (newVal < 20) newVal = 20; setWeight(newVal.toString()); };
 
+  // --- 운동 기록(DB) 백업 및 복원 ---
   const handleBackupDB = async () => {
     try {
-      const dbPath = `${FileSystem.documentDirectory}SQLite/workout_tracker_v3.db`;
-      const fileExists = await FileSystem.getInfoAsync(dbPath);
-      if (!fileExists.exists) return showAlert('안내', '아직 백업할 데이터가 생성되지 않았습니다.', 'info');
+      const jsonString = await exportWorkoutLogsJSON();
+      const filePath = `${FileSystem.cacheDirectory}Workout_DB_Backup.json`;
+      
+      await FileSystem.writeAsStringAsync(filePath, jsonString, { encoding: 'utf8' });
       const isAvailable = await Sharing.isAvailableAsync();
-      if (isAvailable) await Sharing.shareAsync(dbPath, { dialogTitle: '나만의 운동 기록 DB 백업', mimeType: 'application/x-sqlite3' });
-    } catch (error) {}
+      if (isAvailable) await Sharing.shareAsync(filePath, { dialogTitle: '운동 기록 DB 백업 (JSON)' });
+    } catch (error) {
+      showAlert('오류', '백업 데이터를 생성하는데 실패했습니다.', 'info');
+    }
   };
 
   const handleRestoreDB = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
-      if (result.canceled) return;
+      const result = await DocumentPicker.getDocumentAsync({ 
+        type: ['*/*', 'application/json', 'application/octet-stream'], 
+        // 🌟 1. file:// 주소로 안전하게 복사해 오도록 true 설정
+        copyToCacheDirectory: true 
+      });
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
       
-      showAlert('전체 기록 복원', '선택한 파일로 전체 운동 기록(DB)을 덮어씌우시겠습니까?\n이 작업은 되돌릴 수 없으며, 적용을 위해 앱을 껐다 켜야 합니다.', 'confirm', async () => {
+      const fileUri = result.assets[0].uri;
+      
+      showAlert('운동 기록 복원', '선택한 파일로 전체 운동 기록을 덮어씌우시겠습니까?\n이 작업은 되돌릴 수 없습니다.', 'confirm', async () => {
         try {
-          const dbPath = `${FileSystem.documentDirectory}SQLite/workout_tracker_v3.db`;
-          await FileSystem.copyAsync({ from: result.assets[0].uri, to: dbPath });
-          showAlert('복원 완료', '데이터베이스 복원이 완료되었습니다.\n지금 앱을 강제로 종료한 후 다시 실행해 주세요.', 'info', null, false);
+          // 🌟 2. 엑스포 파일시스템 대신 fetch를 사용하여 파일 텍스트를 다이렉트로 읽어옵니다.
+          const response = await fetch(fileUri);
+          const fileContents = await response.text();
+          const parsedData = JSON.parse(fileContents);
+          
+          if (!parsedData.dailyLogs && !parsedData.exerciseLogs) {
+            return showAlert('오류', '올바른 운동 기록 백업 파일이 아닙니다.', 'info');
+          }
+
+          await restoreWorkoutLogsJSON(parsedData);
+          await loadData(); 
+          showAlert('복원 완료', '운동 기록이 성공적으로 복원되었습니다.', 'info');
         } catch (e) {
+          console.error('DB 복원 에러:', e);
           showAlert('오류', '데이터베이스 복원 중 문제가 발생했습니다.', 'info');
         }
       });
-    } catch (error) {}
+    } catch (error) {
+      console.error('DB 파일 선택 에러:', error);
+    }
   };
 
+  // --- 앱 설정 및 루틴 백업 및 복원 ---
   const handleBackupSettings = async () => {
     try {
       const settings = await getSettings();
@@ -203,22 +244,40 @@ export default function SettingsScreen() {
 
   const handleRestoreSettings = async () => {
     try {
-      // JSON 제한을 풀고 모든 파일 형식(*/*) 허용
-      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
-      if (result.canceled) return;
-      const fileContents = await FileSystem.readAsStringAsync(result.assets[0].uri, { encoding: 'utf8' });
-      const parsedData = JSON.parse(fileContents);
-      if (!parsedData.settings && !parsedData.templates) return showAlert('오류', '올바른 백업 파일 형식이 아닙니다.', 'info');
-      
+      const result = await DocumentPicker.getDocumentAsync({ 
+        type: ['*/*', 'application/json', 'application/octet-stream'], 
+        // 🌟 1. file:// 주소로 안전하게 복사해 오도록 true 설정
+        copyToCacheDirectory: true 
+      });
+    
+      if (result.canceled || !result.assets || result.assets.length === 0) return;
+    
+      const fileUri = result.assets[0].uri;
+
       showAlert('설정 복원', '설정과 루틴 템플릿 데이터를 덮어쓰시겠습니까?', 'confirm', async () => {
         try {
+          // 🌟 2. 엑스포 파일시스템 대신 fetch를 사용하여 파일 텍스트를 다이렉트로 읽어옵니다.
+          const response = await fetch(fileUri);
+          const fileContents = await response.text();
+          const parsedData = JSON.parse(fileContents);
+        
+          if (!parsedData.settings && !parsedData.templates) {
+            return showAlert('오류', '올바른 백업 파일 형식이 아닙니다.', 'info');
+          }
+
           await restoreSettingsAndTemplates(parsedData);
           await AsyncStorage.setItem('template_update_time', Date.now().toString()); 
-          showAlert('복원 완료', '데이터가 성공적으로 복원되었습니다.', 'info');
-          loadData();
-        } catch (e) { showAlert('오류', '데이터 복원 중 문제가 발생했습니다.', 'info'); }
+          await loadData(); 
+        
+          showAlert('복원 완료', '데이터가 성공적으로 복원되어 화면에 반영되었습니다.', 'info');
+        } catch (e) { 
+          console.error('설정 복원 에러:', e);
+          showAlert('오류', '데이터 복원 중 문제가 발생했습니다. 파일 형식을 확인해 주세요.', 'info'); 
+        }
       });
-    } catch (error) {}
+    } catch (error) {
+      console.error('설정 불러오기 선택 에러:', error);
+    }
   };
 
   const handleSelectTemplate = async (templateId, templateName) => {
@@ -359,7 +418,6 @@ export default function SettingsScreen() {
   };
 
   return (
-    // 안전 영역 확보: View를 SafeAreaView로 변경하고 불필요한 paddingTop 제거
     <SafeAreaView style={[styles.mainWrapper, { backgroundColor: theme.bg }]}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 + insets.bottom }} showsVerticalScrollIndicator={false}>
         
@@ -379,7 +437,7 @@ export default function SettingsScreen() {
             <Text style={[styles.label, {color: theme.textMain}]}>키</Text>
             <View style={[styles.stepperContainer, {backgroundColor: theme.inputBg, borderColor: theme.borderColor, borderRadius: theme.radius}]}>
               <TouchableOpacity style={[styles.stepperBtn, {backgroundColor: theme.cardBg, borderRadius: theme.radius}]} onPress={() => adjustHeight(-1)}><Ionicons name="remove" size={18} color={theme.textMain} /></TouchableOpacity>
-              <Text style={[styles.stepperValue, {color: theme.textMain}]}>{height} cm</Text>
+              <TextInput style={[styles.stepperValueInput, {color: theme.textMain}]} value={height} onChangeText={setHeight} keyboardType="numeric" />
               <TouchableOpacity style={[styles.stepperBtn, {backgroundColor: theme.cardBg, borderRadius: theme.radius}]} onPress={() => adjustHeight(1)}><Ionicons name="add" size={18} color={theme.textMain} /></TouchableOpacity>
             </View>
           </View>
@@ -388,7 +446,7 @@ export default function SettingsScreen() {
             <Text style={[styles.label, {color: theme.textMain}]}>몸무게</Text>
             <View style={[styles.stepperContainer, {backgroundColor: theme.inputBg, borderColor: theme.borderColor, borderRadius: theme.radius}]}>
               <TouchableOpacity style={[styles.stepperBtn, {backgroundColor: theme.cardBg, borderRadius: theme.radius}]} onPress={() => adjustWeight(-1)}><Ionicons name="remove" size={18} color={theme.textMain} /></TouchableOpacity>
-              <Text style={[styles.stepperValue, {color: theme.textMain}]}>{weight} kg</Text>
+              <TextInput style={[styles.stepperValueInput, {color: theme.textMain}]} value={weight} onChangeText={setWeight} keyboardType="numeric" />
               <TouchableOpacity style={[styles.stepperBtn, {backgroundColor: theme.cardBg, borderRadius: theme.radius}]} onPress={() => adjustWeight(1)}><Ionicons name="add" size={18} color={theme.textMain} /></TouchableOpacity>
             </View>
           </View>
@@ -571,7 +629,6 @@ export default function SettingsScreen() {
                           )}
                         </View>
                         <View style={styles.templateActionButtons}>
-                          {/* 화살표 아이콘을 테마 색상(theme.textMain, theme.borderColor)으로 변경하여 가시성 확보 */}
                           <TouchableOpacity onPress={() => moveTemplateExercise(dayIndex, exIndex, -1)} style={styles.templateIconButton} disabled={exIndex === 0}><Ionicons name="chevron-up" size={22} color={exIndex === 0 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
                           <TouchableOpacity onPress={() => moveTemplateExercise(dayIndex, exIndex, 1)} style={styles.templateIconButton} disabled={exIndex === dayExercises.length - 1}><Ionicons name="chevron-down" size={22} color={exIndex === dayExercises.length - 1 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
                           <TouchableOpacity onPress={() => removeTemplateExercise(dayIndex, exIndex)} style={styles.templateIconButton}><Ionicons name="trash-outline" size={22} color="#f44336" /></TouchableOpacity>
@@ -611,15 +668,15 @@ export default function SettingsScreen() {
         <Modal visible={alertConfig.visible} transparent={true} animationType="fade" onRequestClose={closeAlert}>
           <TouchableOpacity style={styles.alertBackdrop} activeOpacity={1} onPress={() => { if (alertConfig.dismissible) closeAlert(); }}>
             <TouchableOpacity activeOpacity={1} onPress={(alertConfig.type === 'info' && alertConfig.dismissible) ? closeAlert : undefined}>
-              <View style={styles.alertBox}>
-                <Text style={styles.alertTitleText}>{alertConfig.title}</Text>
-                <Text style={styles.alertMessageText}>{alertConfig.message}</Text>
+              <View style={[styles.alertBox, {backgroundColor: theme.cardBg, borderRadius: theme.radius}]}>
+                <Text style={[styles.alertTitleText, {color: theme.textMain}]}>{alertConfig.title}</Text>
+                <Text style={[styles.alertMessageText, {color: theme.textSub}]}>{alertConfig.message}</Text>
                 {alertConfig.type === 'confirm' ? (
                   <View style={styles.alertBtnRow}>
-                    <TouchableOpacity style={styles.alertCancelBtn} onPress={closeAlert}><Text style={styles.alertCancelText}>취소</Text></TouchableOpacity>
-                    <TouchableOpacity style={styles.alertConfirmBtn} onPress={() => { if (alertConfig.onConfirm) alertConfig.onConfirm(); closeAlert(); }}><Text style={styles.alertConfirmText}>확인</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.alertCancelBtn, {backgroundColor: theme.inputBg, borderRadius: theme.radius}]} onPress={closeAlert}><Text style={[styles.alertCancelText, {color: theme.textMain}]}>취소</Text></TouchableOpacity>
+                    <TouchableOpacity style={[styles.alertConfirmBtn, {backgroundColor: theme.accentPrimary, borderRadius: theme.radius}]} onPress={() => { if (alertConfig.onConfirm) alertConfig.onConfirm(); closeAlert(); }}><Text style={[styles.alertConfirmText, isDarkMode && {color: '#111'}]}>확인</Text></TouchableOpacity>
                   </View>
-                ) : ( alertConfig.dismissible && <Text style={styles.alertHintText}>아무 곳이나 터치하여 닫기</Text> )}
+                ) : ( <Text style={styles.alertHintText}>아무 곳이나 터치하여 닫기</Text> )}
               </View>
             </TouchableOpacity>
           </TouchableOpacity>
@@ -630,6 +687,7 @@ export default function SettingsScreen() {
   );
 }
 
+// 스타일 코드는 기존과 완벽하게 동일합니다.
 const styles = StyleSheet.create({
   mainWrapper: { flex: 1 },
   container: { flex: 1 },
@@ -648,6 +706,7 @@ const styles = StyleSheet.create({
   stepperContainer: { flexDirection: 'row', alignItems: 'center', padding: 4, borderWidth: 1 },
   stepperBtn: { width: 34, height: 34, alignItems: 'center', justifyContent: 'center', elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2 },
   stepperValue: { width: 70, textAlign: 'center', fontSize: 15, fontWeight: 'bold' },
+  stepperValueInput: { width: 70, textAlign: 'center', fontSize: 15, fontWeight: 'bold' },
   
   dataGroupRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12 },
   dataBtnGroup: { flexDirection: 'row', gap: 8 },

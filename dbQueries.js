@@ -1,10 +1,8 @@
 // dbQueries.js
 import * as SQLite from 'expo-sqlite';
 
-// 🌟 최상단에서 강제로 열지 않고, 필요할 때 연결하도록 변수만 선언합니다.
 let dbInstance = null;
 
-// 🌟 데이터베이스를 비동기식으로 부드럽게 여는 함수
 const getDB = async () => {
   if (!dbInstance) {
     dbInstance = await SQLite.openDatabaseAsync('workout_tracker_v3.db');
@@ -14,7 +12,7 @@ const getDB = async () => {
 
 export const initDB = async () => {
   try {
-    const db = await getDB(); // 🌟 연결 호출
+    const db = await getDB();
     await db.execAsync(`
       CREATE TABLE IF NOT EXISTS profile (
         id INTEGER PRIMARY KEY AUTOINCREMENT, user_name TEXT, height REAL, weight REAL
@@ -80,10 +78,12 @@ export const updateSetting = async (key, value) => {
   return true;
 };
 
+// 🌟 프로필 저장 로직 수정: getSettings와 완벽하게 호환되도록 settings 테이블에 저장합니다.
 export const updateProfile = async (name, height, weight) => {
   const db = await getDB();
-  await db.runAsync(`DELETE FROM profile;`);
-  await db.runAsync(`INSERT INTO profile (user_name, height, weight) VALUES (?, ?, ?);`, [name, height, weight]);
+  await db.runAsync(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);`, ['user_name', String(name)]);
+  await db.runAsync(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);`, ['height', String(height)]);
+  await db.runAsync(`INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?);`, ['weight', String(weight)]);
   return true;
 };
 
@@ -302,3 +302,49 @@ export const restoreSettingsAndTemplates = async (parsedData) => {
   }
   return true;
 };
+
+
+
+
+// dbQueries.js 맨 밑에 아래 코드 추가
+
+export const exportWorkoutLogsJSON = async () => {
+  const db = await getDB();
+  const dailyLogs = await db.getAllAsync(`SELECT * FROM daily_logs;`);
+  const exerciseLogs = await db.getAllAsync(`SELECT * FROM exercise_logs;`);
+  return JSON.stringify({ dailyLogs, exerciseLogs }, null, 2);
+};
+
+export const restoreWorkoutLogsJSON = async (parsedData) => {
+  const db = await getDB();
+  if (parsedData.dailyLogs && Array.isArray(parsedData.dailyLogs)) {
+    for (const log of parsedData.dailyLogs) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO daily_logs (date, status, memo, water_consumed) VALUES (?, ?, ?, ?);`,
+        [log.date, log.status, log.memo, log.water_consumed]
+      );
+    }
+  }
+  if (parsedData.exerciseLogs && Array.isArray(parsedData.exerciseLogs)) {
+    // 기존 운동 기록을 지우고 덮어쓰기하여 완벽한 복원을 수행합니다.
+    await db.runAsync(`DELETE FROM exercise_logs;`); 
+    for (const ex of parsedData.exerciseLogs) {
+      await db.runAsync(
+        `INSERT INTO exercise_logs (date, name, type, actual_weight, actual_reps, actual_sets, actual_time, actual_speed, actual_distance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [ex.date, ex.name, ex.type, parseFloat(ex.actual_weight) || 0, parseFloat(ex.actual_reps) || 0, parseFloat(ex.actual_sets) || 0, parseFloat(ex.actual_time) || 0, parseFloat(ex.actual_speed) || 0, parseFloat(ex.actual_distance) || 0]
+      );
+    }
+  }
+  return true;
+};
+
+
+
+
+
+
+
+
+
+
+

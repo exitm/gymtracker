@@ -338,7 +338,6 @@ export default function TodayWorkoutScreen() {
         <ScrollView style={styles.container} contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 + insets.bottom }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
           
           <View style={styles.header}>
-            {/* 🌟 1. 요청하신 헤더 서브타이틀 텍스트로 변경되었습니다. */}
             <Text style={[styles.headerSub, {color: theme.textSub}]}>오늘 흘린 땀방울, 내일 피어날 행복!</Text>
             <Text style={[styles.headerTitle, {color: theme.textMain}]}>운동 진행</Text>
           </View>
@@ -378,7 +377,6 @@ export default function TodayWorkoutScreen() {
           <View style={[styles.waterWidget, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: theme.borderColor}]}>
             {waterLeft > 0 ? (
               <>
-                {/* 🌟 2. 수분 텍스트와 버튼이 겹치지 않도록 flex 구조를 개선했습니다. */}
                 <View style={styles.waterHeader}>
                   <View style={styles.waterTitleRow}>
                     <Text style={{fontSize: 16, marginRight: 6}}>💧</Text>
@@ -427,8 +425,9 @@ export default function TodayWorkoutScreen() {
                   </TouchableOpacity>
 
                   <View style={styles.cardHeaderActions}>
-                    <TouchableOpacity onPress={() => moveExercise(exercise.id, -1)} style={styles.iconBtn} disabled={index === 0}><Ionicons name="chevron-up" size={24} color={index === 0 ? theme.inputBorder : theme.textSub} /></TouchableOpacity>
-                    <TouchableOpacity onPress={() => moveExercise(exercise.id, 1)} style={styles.iconBtn} disabled={index === exercises.length - 1}><Ionicons name="chevron-down" size={24} color={index === exercises.length - 1 ? theme.inputBorder : theme.textSub} /></TouchableOpacity>
+                    {/* [수정] 위아래 이동 화살표 색상을 어두운 배경에서도 잘 보이도록 theme.textMain(흰색/검정)으로 변경 */}
+                    <TouchableOpacity onPress={() => moveExercise(exercise.id, -1)} style={styles.iconBtn} disabled={index === 0}><Ionicons name="chevron-up" size={24} color={index === 0 ? '#666666' : theme.textMain} /></TouchableOpacity>
+                    <TouchableOpacity onPress={() => moveExercise(exercise.id, 1)} style={styles.iconBtn} disabled={index === exercises.length - 1}><Ionicons name="chevron-down" size={24} color={index === exercises.length - 1 ? '#666666' : theme.textMain} /></TouchableOpacity>
                     <TouchableOpacity onPress={() => deleteExercise(exercise.id)} style={styles.iconBtn}><Ionicons name="trash-outline" size={22} color={theme.accentSecondary} /></TouchableOpacity>
                   </View>
                 </View>
@@ -588,7 +587,6 @@ const styles = StyleSheet.create({
 
   waterWidget: { padding: 20, marginBottom: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.03, shadowRadius: 10, elevation: 1, borderWidth: 1 },
   
-  // 🌟 버튼과 텍스트의 간격을 벌리고 안정적으로 배치하기 위해 Flexbox를 수정했습니다.
   waterHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
   waterTitleRow: { flexDirection: 'row', alignItems: 'center', flex: 1, paddingRight: 10 },
   waterTitle: { fontSize: 16, fontWeight: 'bold', flexShrink: 1 },

@@ -16,15 +16,26 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/splash-1.jpg",
+        "foregroundImage": "./assets/splash-1.png",
         "backgroundColor": "#5333ED"
       },
       "package": "com.lota1.gymtrackerclean"
     },
-    "extra": {
-      "eas": {
-        "projectId": "c65030f8-f9a5-4ce2-b255-8048ae305dc1"
-      }
-    }
+    "plugins": [
+      "expo-build-properties",
+      "expo-font",
+      "expo-image",
+      "expo-sharing",
+      "expo-splash-screen",
+      "expo-sqlite",
+      "expo-status-bar",
+      "expo-web-browser",
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "운동 기록을 위해 백그라운드에서도 헬스장 도착 여부를 확인합니다."
+        }
+      ]
+    ]
   }
 }

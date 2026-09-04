@@ -5,6 +5,7 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
+import AsyncStorage from '@react-native-async-storage/async-storage'; 
 
 import { getSettings, getWeeklyLogsStatus, getAllCompletedDatesForStats, getWeeklyWaterAverage, getExercisesForDate } from '../dbQueries';
 
@@ -55,7 +56,10 @@ export default function HomeScreen() {
 
   const loadDashboardData = async () => {
     const settings = await getSettings();
-    setUserName(settings.user_name || '사용자');
+    // [수정] AsyncStorage를 우선 확인하여 이름 초기화 버그 방어
+    const savedName = await AsyncStorage.getItem('userName');
+    setUserName(savedName || settings.user_name || '사용자');
+    
     setWeeklyGoal(settings.weekly_goal || 5);
     setWaterGoal(settings.water_goal || 700);
     setIsDarkMode(settings.is_dark_mode === 1); 
@@ -139,7 +143,6 @@ export default function HomeScreen() {
         
         <View style={styles.header}>
           <Text style={[styles.headerSub, {color: theme.textSub}]}>오늘도 나를 돌보는 시간</Text>
-          {/* 🌟 수정사항: isDarkMode 값에 따라 이모지가 '💪' 또는 '❤️'로 동적으로 렌더링됩니다. */}
           <Text style={[styles.headerTitle, {color: theme.textMain}]}>
             안녕, {userName} {isDarkMode ? '💪' : '❤️'}
           </Text>
