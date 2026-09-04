@@ -4,10 +4,10 @@
     "slug": "gymtracker-clean",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/splash-1.jpg",
+    "icon": "./assets/splash-1.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/splash-1.jpg",
+      "image": "./assets/splash-1.png",
       "resizeMode": "contain",
       "backgroundColor": "#5333ED"
     },
