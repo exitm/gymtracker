@@ -3,6 +3,9 @@ import React, { useState } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+// 🌟 앱 전역 상태 관리를 위해 AsyncStorage를 추가로 불러옵니다.
+import AsyncStorage from '@react-native-async-storage/async-storage'; 
+
 import { updateProfile, updateSetting, saveNewRoutineTemplate } from '../dbQueries';
 
 // 디자인 시스템 테마 색상 (온보딩은 기본 아이보리/핑크 테마 유지)
@@ -30,12 +33,34 @@ export default function OnboardingScreen({ onFinish }) {
   const [cycleDays, setCycleDays] = useState('3');
   const [routineData, setRoutineData] = useState([[], [], []]);
 
+  // 🌟 온보딩을 완벽하게 종료하고 App.js로 신호를 보내는 함수입니다.
+  const finalizeOnboarding = async () => {
+    try {
+      await AsyncStorage.setItem('hasOnboarded', 'true');
+      onFinish();
+    } catch (error) {
+      console.error('온보딩 종료 처리 에러:', error);
+      onFinish(); // 에러가 나더라도 앱 진행을 막지 않도록 강제로 넘깁니다.
+    }
+  };
+
   const handleNext = async () => {
     if (step === 1) {
       if (!name.trim()) {
         return Alert.alert("입력 확인", "이름(닉네임)을 입력해 주세요.");
       }
-      await updateProfile(name.trim(), parseFloat(height) || 170, parseFloat(weight) || 65);
+      
+      const numHeight = parseFloat(height) || 170;
+      const numWeight = parseFloat(weight) || 65;
+      
+      // DB 업데이트
+      await updateProfile(name.trim(), numHeight, numWeight);
+      
+      // 🌟 설정 화면 등에서 빠르게 불러올 수 있도록 로컬 메모리에도 동시 저장합니다.
+      await AsyncStorage.setItem('userName', name.trim());
+      await AsyncStorage.setItem('userHeight', numHeight.toString());
+      await AsyncStorage.setItem('userWeight', numWeight.toString());
+      
       setStep(2);
     } else if (step === 2) {
       await updateSetting('weekly_goal', parseInt(weeklyGoal) || 5);
@@ -52,12 +77,13 @@ export default function OnboardingScreen({ onFinish }) {
       if (hasTemplateName && hasExercises) {
         const days = parseInt(cycleDays) || 1;
         await saveNewRoutineTemplate(templateName.trim(), days, routineData);
-        onFinish();
+        // 루틴 저장 후 온보딩 종료
+        await finalizeOnboarding();
       } else {
         Alert.alert(
           "안내",
           "설정에서 언제든지 나만의 루틴을 만들 수 있습니다.",
-          [{ text: "확인", onPress: () => onFinish() }],
+          [{ text: "확인", onPress: () => finalizeOnboarding() }], // 생략 시에도 온보딩 종료 도장을 찍습니다.
           { cancelable: false }
         );
       }
@@ -117,14 +143,12 @@ export default function OnboardingScreen({ onFinish }) {
         keyboardShouldPersistTaps="handled" 
         showsVerticalScrollIndicator={false}
       >
-        {/* 🌟 1단계: 신체 정보 및 이름 입력 */}
         {step === 1 && (
           <View style={styles.card}>
             <View style={styles.iconCircle}><Ionicons name="person" size={40} color={ACCENT_COLOR} /></View>
             <Text style={styles.title}>신체 정보를 알려주세요</Text>
             <Text style={styles.description}>맞춤형 기록 관리를 위해 꼭 필요한 정보입니다.</Text>
             
-            {/* 🌟 이름(닉네임) 입력칸 확실히 배치 */}
             <View style={styles.inputGroup}>
               <Text style={styles.label}>이름 (닉네임)</Text>
               <TextInput 

@@ -5,14 +5,17 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createMaterialTopTabNavigator } from '@react-navigation/material-top-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
+import AsyncStorage from '@react-native-async-storage/async-storage'; // 🌟 추가됨
 
 import { StatusBar } from 'expo-status-bar';
 import * as NavigationBar from 'expo-navigation-bar';
 
+// 화면 컴포넌트 임포트
 import HomeScreen from './screens/HomeScreen';
 import TodayWorkoutScreen from './screens/TodayWorkoutScreen';
 import CalendarScreen from './screens/CalendarScreen';
 import SettingsScreen from './screens/SettingsScreen';
+import OnboardingScreen from './screens/OnboardingScreen'; // 🌟 새로 만든 온보딩 화면 추가
 
 import { initDB, getSettings } from './dbQueries'; 
 
@@ -59,6 +62,7 @@ function MainTabs({ isDarkMode }) {
 export default function App() {
   const [isDbReady, setIsDbReady] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState(false);
+  const [isFirstLaunch, setIsFirstLaunch] = useState(null); // 🌟 첫 실행 여부를 기억하는 변수
 
   useEffect(() => {
     const setupApp = async () => {
@@ -68,10 +72,16 @@ export default function App() {
         const initialDarkMode = settings.is_dark_mode === 1;
         setIsDarkMode(initialDarkMode);
         
-        // 🌟 안드로이드 네비게이션 바 안전망 추가
+        // 🌟 앱이 처음 설치된 것인지 확인합니다. (hasOnboarded 값이 'true'인지 확인)
+        const onboardedStatus = await AsyncStorage.getItem('hasOnboarded');
+        if (onboardedStatus === 'true') {
+          setIsFirstLaunch(false); // 온보딩을 이미 했다면 바로 메인 화면으로 갑니다.
+        } else {
+          setIsFirstLaunch(true);  // 온보딩을 안 했다면 온보딩 화면을 보여줍니다.
+        }
+        
         if (Platform.OS === 'android') {
           try {
-            // 명령어가 함수 형태로 정상적으로 존재하는지 먼저 확인합니다.
             if (NavigationBar && typeof NavigationBar.setBackgroundColorAsync === 'function') {
               await NavigationBar.setBackgroundColorAsync(initialDarkMode ? '#1E1E1E' : '#FFFFFF');
               await NavigationBar.setButtonStyleAsync(initialDarkMode ? 'light' : 'dark');
@@ -95,16 +105,15 @@ export default function App() {
             await NavigationBar.setBackgroundColorAsync(darkModeEnabled ? '#1E1E1E' : '#FFFFFF');
             await NavigationBar.setButtonStyleAsync(darkModeEnabled ? 'light' : 'dark');
           }
-        } catch (navError) {
-          console.log('네비게이션 바 설정 건너뜀:', navError);
-        }
+        } catch (navError) {}
       }
     });
 
     return () => themeListener.remove();
   }, []);
 
-  if (!isDbReady) {
+  // 아직 로딩 중이라면 로딩 화면을 보여줍니다.
+  if (!isDbReady || isFirstLaunch === null) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: isDarkMode ? '#121212' : '#FFFFFF' }}>
         <ActivityIndicator size="large" color="#00D1FF" />
@@ -113,6 +122,18 @@ export default function App() {
     );
   }
 
+  // 🌟 첫 실행이라면 온보딩 화면을 띄워줍니다!
+  if (isFirstLaunch) {
+    return (
+      <SafeAreaProvider>
+        <StatusBar style="light" />
+        {/* 온보딩이 끝나면 setIsFirstLaunch를 false로 바꿔 메인 화면으로 넘깁니다. */}
+        <OnboardingScreen onFinish={() => setIsFirstLaunch(false)} />
+      </SafeAreaProvider>
+    );
+  }
+
+  // 온보딩이 끝났거나 기존 사용자라면 메인 탭 화면을 띄워줍니다.
   return (
     <SafeAreaProvider>
       <StatusBar style={isDarkMode ? 'light' : 'dark'} backgroundColor={isDarkMode ? '#111317' : '#F7F4F2'} />
