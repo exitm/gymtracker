@@ -1,16 +1,14 @@
 // screens/SettingsScreen.js
 import React, { useState, useCallback, useRef } from 'react';
-import { View, Text, StyleSheet, TextInput, Switch, ScrollView, TouchableOpacity, Modal, FlatList, DeviceEventEmitter } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Switch, ScrollView, TouchableOpacity, Modal, FlatList, DeviceEventEmitter, Platform, Alert } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons'; 
 
-// 🌟 에러를 일으키는 최신 File API를 지우고, 백업(저장) 용도로 가장 안정적인 legacy만 남깁니다.
 import * as FileSystem from 'expo-file-system/legacy'; 
-
 import * as Sharing from 'expo-sharing';
 import * as Location from 'expo-location';
 import * as DocumentPicker from 'expo-document-picker';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage'; 
 
 import { 
@@ -66,8 +64,27 @@ export default function SettingsScreen() {
   const showAlert = (title, message, type = 'info', onConfirm = null, dismissible = true) => { setAlertConfig({ visible: true, title, message, type, onConfirm, dismissible }); };
   const closeAlert = () => setAlertConfig(prev => ({ ...prev, visible: false }));
 
+  // 🌟 2번 해결책: 탭을 오갈 때 데이터 로딩이 충돌하지 않도록 안전 스위치(isActive)를 달아줍니다.
   useFocusEffect(
-    useCallback(() => { loadData(); checkGeofencingStatus(); }, [])
+    useCallback(() => {
+      let isActive = true;
+
+      const initScreenData = async () => {
+        try {
+          if (isActive) await loadData();
+          if (isActive) await checkGeofencingStatus();
+        } catch (error) {
+          console.error("데이터 로드 오류:", error);
+        }
+      };
+
+      initScreenData();
+
+      // 사용자가 탭을 다른 곳으로 넘기면 즉시 스위치를 꺼서 백그라운드 작업을 취소합니다.
+      return () => {
+        isActive = false;
+      };
+    }, [])
   );
 
   const loadData = async () => {
@@ -100,7 +117,6 @@ export default function SettingsScreen() {
         setIsGeofencingActive(false);
       }
     } catch (error) {
-      console.log('지오펜싱 상태 확인 건너뜀 (권한 없음):', error);
       setIsGeofencingActive(false);
     }
   };
@@ -143,11 +159,12 @@ export default function SettingsScreen() {
   };
 
   const handleSaveProfile = async () => {
-    if (!name.trim()) return showAlert('입력 확인', '이름을 입력해 주세요.', 'info');
+    const safeName = name || '';
+    if (!safeName.trim()) return showAlert('입력 확인', '이름을 입력해 주세요.', 'info');
     const numHeight = parseInt(height) || 171;
     const numWeight = parseInt(weight) || 65;
-    await updateProfile(name.trim(), numHeight, numWeight); 
-    await AsyncStorage.setItem('userName', name.trim());
+    await updateProfile(safeName.trim(), numHeight, numWeight); 
+    await AsyncStorage.setItem('userName', safeName.trim());
     await AsyncStorage.setItem('userHeight', numHeight.toString());
     await AsyncStorage.setItem('userWeight', numWeight.toString());
     showAlert('저장 완료', '프로필 정보가 저장되었습니다.', 'info');
@@ -174,12 +191,10 @@ export default function SettingsScreen() {
   const adjustHeight = (step) => { let newVal = (parseInt(height) || 171) + step; if (newVal < 50) newVal = 50; setHeight(newVal.toString()); };
   const adjustWeight = (step) => { let newVal = (parseInt(weight) || 65) + step; if (newVal < 20) newVal = 20; setWeight(newVal.toString()); };
 
-  // --- 운동 기록(DB) 백업 및 복원 ---
   const handleBackupDB = async () => {
     try {
       const jsonString = await exportWorkoutLogsJSON();
       const filePath = `${FileSystem.cacheDirectory}Workout_DB_Backup.json`;
-      
       await FileSystem.writeAsStringAsync(filePath, jsonString, { encoding: 'utf8' });
       const isAvailable = await Sharing.isAvailableAsync();
       if (isAvailable) await Sharing.shareAsync(filePath, { dialogTitle: '운동 기록 DB 백업 (JSON)' });
@@ -190,40 +205,24 @@ export default function SettingsScreen() {
 
   const handleRestoreDB = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({ 
-        type: ['*/*', 'application/json', 'application/octet-stream'], 
-        // 🌟 1. file:// 주소로 안전하게 복사해 오도록 true 설정
-        copyToCacheDirectory: true 
-      });
+      const result = await DocumentPicker.getDocumentAsync({ type: ['*/*', 'application/json', 'application/octet-stream'], copyToCacheDirectory: true });
       if (result.canceled || !result.assets || result.assets.length === 0) return;
-      
       const fileUri = result.assets[0].uri;
       
       showAlert('운동 기록 복원', '선택한 파일로 전체 운동 기록을 덮어씌우시겠습니까?\n이 작업은 되돌릴 수 없습니다.', 'confirm', async () => {
         try {
-          // 🌟 2. 엑스포 파일시스템 대신 fetch를 사용하여 파일 텍스트를 다이렉트로 읽어옵니다.
           const response = await fetch(fileUri);
           const fileContents = await response.text();
           const parsedData = JSON.parse(fileContents);
-          
-          if (!parsedData.dailyLogs && !parsedData.exerciseLogs) {
-            return showAlert('오류', '올바른 운동 기록 백업 파일이 아닙니다.', 'info');
-          }
-
+          if (!parsedData.dailyLogs && !parsedData.exerciseLogs) return showAlert('오류', '올바른 운동 기록 백업 파일이 아닙니다.', 'info');
           await restoreWorkoutLogsJSON(parsedData);
           await loadData(); 
           showAlert('복원 완료', '운동 기록이 성공적으로 복원되었습니다.', 'info');
-        } catch (e) {
-          console.error('DB 복원 에러:', e);
-          showAlert('오류', '데이터베이스 복원 중 문제가 발생했습니다.', 'info');
-        }
+        } catch (e) { showAlert('오류', '데이터베이스 복원 중 문제가 발생했습니다.', 'info'); }
       });
-    } catch (error) {
-      console.error('DB 파일 선택 에러:', error);
-    }
+    } catch (error) {}
   };
 
-  // --- 앱 설정 및 루틴 백업 및 복원 ---
   const handleBackupSettings = async () => {
     try {
       const settings = await getSettings();
@@ -244,40 +243,23 @@ export default function SettingsScreen() {
 
   const handleRestoreSettings = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({ 
-        type: ['*/*', 'application/json', 'application/octet-stream'], 
-        // 🌟 1. file:// 주소로 안전하게 복사해 오도록 true 설정
-        copyToCacheDirectory: true 
-      });
-    
+      const result = await DocumentPicker.getDocumentAsync({ type: ['*/*', 'application/json', 'application/octet-stream'], copyToCacheDirectory: true });
       if (result.canceled || !result.assets || result.assets.length === 0) return;
-    
       const fileUri = result.assets[0].uri;
 
       showAlert('설정 복원', '설정과 루틴 템플릿 데이터를 덮어쓰시겠습니까?', 'confirm', async () => {
         try {
-          // 🌟 2. 엑스포 파일시스템 대신 fetch를 사용하여 파일 텍스트를 다이렉트로 읽어옵니다.
           const response = await fetch(fileUri);
           const fileContents = await response.text();
           const parsedData = JSON.parse(fileContents);
-        
-          if (!parsedData.settings && !parsedData.templates) {
-            return showAlert('오류', '올바른 백업 파일 형식이 아닙니다.', 'info');
-          }
-
+          if (!parsedData.settings && !parsedData.templates) return showAlert('오류', '올바른 백업 파일 형식이 아닙니다.', 'info');
           await restoreSettingsAndTemplates(parsedData);
           await AsyncStorage.setItem('template_update_time', Date.now().toString()); 
           await loadData(); 
-        
           showAlert('복원 완료', '데이터가 성공적으로 복원되어 화면에 반영되었습니다.', 'info');
-        } catch (e) { 
-          console.error('설정 복원 에러:', e);
-          showAlert('오류', '데이터 복원 중 문제가 발생했습니다. 파일 형식을 확인해 주세요.', 'info'); 
-        }
+        } catch (e) { showAlert('오류', '데이터 복원 중 문제가 발생했습니다. 파일 형식을 확인해 주세요.', 'info'); }
       });
-    } catch (error) {
-      console.error('설정 불러오기 선택 에러:', error);
-    }
+    } catch (error) {}
   };
 
   const handleSelectTemplate = async (templateId, templateName) => {
@@ -301,20 +283,24 @@ export default function SettingsScreen() {
     setEditingTemplateId(null); setNewTemplateName(''); setCycleDays('3'); setRoutineData([[], [], []]); setRoutineModalVisible(true);
   };
 
-  const handleOpenEditModal = async (templateId) => {
+  const handleOpenEditModal = async (templateId, currentName, currentDays) => {
     try {
+      setEditingTemplateId(templateId); 
+      setNewTemplateName(currentName || '');
+      setCycleDays((currentDays || 3).toString()); 
+      
       const template = await getRoutineTemplateById(templateId);
       if (template) {
-        setEditingTemplateId(template.id); setNewTemplateName(template.name);
-        setCycleDays(template.totalDays.toString()); setRoutineData(template.routineData); setRoutineModalVisible(true);
+        setRoutineData(template.routineData || [[], [], []]); 
       }
+      setRoutineModalVisible(true);
     } catch (error) {}
   };
 
   const handleCycleDaysChange = (text) => {
     setCycleDays(text);
     const numDays = parseInt(text) || 1;
-    if (numDays > 14) return showAlert('안내', '주기는 최대 14일까지만 설정 가능합니다.', 'info');
+    if (numDays > 14) return Alert.alert('안내', '주기는 최대 14일까지만 설정 가능합니다.'); 
     setRoutineData(prevData => {
       const newData = [...prevData];
       if (numDays > newData.length) { for (let i = newData.length; i < numDays; i++) newData.push([]); } 
@@ -385,22 +371,34 @@ export default function SettingsScreen() {
   };
 
   const handleSaveTemplate = async () => {
-    if (!newTemplateName.trim()) return showAlert('안내', '템플릿 이름을 입력해 주세요.', 'info');
+    const safeTemplateName = newTemplateName || '';
+    if (!safeTemplateName.trim()) return Alert.alert('입력 확인', '템플릿 이름을 입력해 주세요.');
+    
     const totalDays = parseInt(cycleDays) || 1;
     for (let dayIndex = 0; dayIndex < totalDays; dayIndex++) {
       const dayExercises = routineData[dayIndex] || [];
       for (let i = 0; i < dayExercises.length; i++) {
         const ex = dayExercises[i];
-        if (!ex.name || ex.name.trim() === '') return showAlert('입력 확인', `${dayIndex + 1}일차에 이름이 없는 운동 기구가 있습니다.`, 'info');
+        const safeExName = ex.name || '';
+        if (!safeExName.trim()) return Alert.alert('입력 확인', `${dayIndex + 1}일차에 이름이 없는 운동 기구가 있습니다.`);
       }
     }
+    
     try {
-      if (editingTemplateId) { await updateRoutineTemplate(editingTemplateId, newTemplateName, totalDays, routineData); showAlert('수정 완료', '템플릿이 수정되었습니다.', 'info'); } 
-      else { await saveNewRoutineTemplate(newTemplateName, totalDays, routineData); showAlert('저장 완료', '새로운 템플릿이 저장되었습니다!', 'info'); }
+      if (editingTemplateId) { 
+        await updateRoutineTemplate(editingTemplateId, safeTemplateName.trim(), totalDays, routineData); 
+        Alert.alert('수정 완료', '템플릿이 수정되었습니다.'); 
+      } else { 
+        await saveNewRoutineTemplate(safeTemplateName.trim(), totalDays, routineData); 
+        Alert.alert('저장 완료', '새로운 템플릿이 저장되었습니다!'); 
+      }
       
       await AsyncStorage.setItem('template_update_time', Date.now().toString()); 
-      setRoutineModalVisible(false); loadData(); 
-    } catch (error) {}
+      setRoutineModalVisible(false); 
+      loadData(); 
+    } catch (error) { 
+      Alert.alert('오류', '데이터를 저장하는 중 문제가 발생했습니다.');
+    }
   };
 
   const filteredExercises = EXERCISE_DICTIONARY.filter(name => name.toLowerCase().includes(searchKeyword.toLowerCase()));
@@ -418,7 +416,7 @@ export default function SettingsScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.mainWrapper, { backgroundColor: theme.bg }]}>
+    <View style={[styles.mainWrapper, { backgroundColor: theme.bg, paddingTop: insets.top }]}>
       <ScrollView contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 + insets.bottom }} showsVerticalScrollIndicator={false}>
         
         <View style={styles.header}>
@@ -548,7 +546,7 @@ export default function SettingsScreen() {
         </View>
         
         {templateList.map(template => (
-          <TouchableOpacity key={template.id} style={[styles.templateCard, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: template.is_active === 1 ? theme.accentPrimary : theme.borderColor}]} onPress={() => handleOpenEditModal(template.id)} activeOpacity={0.7}>
+          <TouchableOpacity key={template.id} style={[styles.templateCard, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: template.is_active === 1 ? theme.accentPrimary : theme.borderColor}]} onPress={() => handleOpenEditModal(template.id, template.name, template.total_days)} activeOpacity={0.7}>
             <View style={{flex: 1}}>
               <Text style={[styles.templateName, {color: theme.textMain}]}>{template.name}</Text>
               <Text style={[styles.templateDetail, {color: theme.textSub}]}>{template.total_days}일 주기 순환 (터치하여 수정)</Text>
@@ -577,60 +575,81 @@ export default function SettingsScreen() {
           <Text style={{ fontSize: 12, color: theme.borderColor, marginTop: 24 }}>© 2026. All rights reserved.</Text>
         </View>
 
-        <Modal visible={isRoutineModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setRoutineModalVisible(false)}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{editingTemplateId ? '루틴 템플릿 수정' : '새 루틴 템플릿 만들기'}</Text>
+      </ScrollView>
+
+      <Modal visible={isRoutineModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setRoutineModalVisible(false)}>
+        <View style={{ flex: 1, backgroundColor: theme.bg, paddingTop: Platform.OS === 'android' ? insets.top : 0, paddingBottom: insets.bottom }}>
+          <View style={[styles.modalHeader, { backgroundColor: theme.cardBg, borderBottomColor: theme.borderColor }]}>
+            <Text style={[styles.modalTitle, { color: theme.textMain }]}>{editingTemplateId ? '루틴 템플릿 수정' : '새 루틴 템플릿 만들기'}</Text>
             <TouchableOpacity onPress={() => setRoutineModalVisible(false)}><Text style={styles.modalCloseText}>취소</Text></TouchableOpacity>
           </View>
           <ScrollView style={styles.modalContent} keyboardShouldPersistTaps="handled">
-            <View style={styles.cycleSetupRow}>
-              <Text style={styles.label}>루틴 이름</Text>
-              <TextInput style={styles.nameInput} value={newTemplateName} onChangeText={setNewTemplateName} placeholder="예: 다이어트 5분할" />
+            <View style={[styles.cycleSetupRow, { backgroundColor: theme.cardBg }]}>
+              <Text style={[styles.label, { color: theme.textMain }]}>루틴 이름</Text>
+              <TextInput style={[styles.nameInput, { borderBottomColor: theme.borderColor, color: theme.textMain }]} value={newTemplateName} onChangeText={setNewTemplateName} placeholder="예: 다이어트 5분할" placeholderTextColor={theme.textSub} />
             </View>
-            <View style={styles.cycleSetupRow}>
-              <Text style={styles.label}>몇 일 주기로 운동하시나요?</Text>
+            <View style={[styles.cycleSetupRow, { backgroundColor: theme.cardBg }]}>
+              <Text style={[styles.label, { color: theme.textMain }]}>몇 일 주기로 운동하시나요?</Text>
               <View style={{flexDirection:'row', alignItems:'center'}}>
                 <TextInput style={styles.cycleInput} value={cycleDays} onChangeText={handleCycleDaysChange} keyboardType="numeric" selectTextOnFocus={true} />
-                <Text style={styles.label}> 일</Text>
+                <Text style={[styles.label, { color: theme.textMain }]}> 일</Text>
               </View>
             </View>
 
             {routineData.map((dayExercises, dayIndex) => (
-              <View key={dayIndex} style={styles.dayCard}>
+              <View key={dayIndex} style={[styles.dayCard, { backgroundColor: theme.cardBg }]}>
                 <View style={styles.dayCardHeader}>
-                  <Text style={styles.dayCardTitle}>{dayIndex + 1}일차</Text>
+                  <Text style={[styles.dayCardTitle, { color: theme.textMain }]}>{dayIndex + 1}일차</Text>
                   <View style={styles.dayCardActions}>
-                    <TouchableOpacity onPress={() => moveTemplateDay(dayIndex, -1)} disabled={dayIndex === 0} style={styles.dayMoveBtn}><Ionicons name="chevron-up-circle" size={24} color={dayIndex === 0 ? "#ddd" : "#888"} /></TouchableOpacity>
-                    <TouchableOpacity onPress={() => moveTemplateDay(dayIndex, 1)} disabled={dayIndex === routineData.length - 1} style={styles.dayMoveBtn}><Ionicons name="chevron-down-circle" size={24} color={dayIndex === routineData.length - 1 ? "#ddd" : "#888"} /></TouchableOpacity>
+                    <TouchableOpacity onPress={() => moveTemplateDay(dayIndex, -1)} disabled={dayIndex === 0} style={styles.dayMoveBtn}><Ionicons name="chevron-up-circle" size={24} color={dayIndex === 0 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
+                    <TouchableOpacity onPress={() => moveTemplateDay(dayIndex, 1)} disabled={dayIndex === routineData.length - 1} style={styles.dayMoveBtn}><Ionicons name="chevron-down-circle" size={24} color={dayIndex === routineData.length - 1 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
                     <TouchableOpacity onPress={() => addExerciseToDay(dayIndex)} style={styles.addExerciseButton}><Text style={styles.addExerciseButtonText}>+ 추가</Text></TouchableOpacity>
                   </View>
                 </View>
 
                 {dayExercises.length === 0 ? ( <Text style={styles.emptyDayText}>휴식일</Text> ) : (
                   dayExercises.map((ex, exIndex) => (
-                    <View key={exIndex} style={styles.templateExerciseCard}>
-                      <TouchableOpacity style={styles.templateInputNameTouchable} onPress={() => { setEditingExTarget({ dayIndex, exIndex }); setSearchKeyword(ex.name); setIsSearchModalVisible(true); }}>
-                        <Text style={[styles.templateInputNameText, !ex.name && {color: '#999'}]}>{ex.name ? ex.name : '운동 이름 선택'}</Text>
+                    <View key={exIndex} style={[styles.templateExerciseCard, { backgroundColor: theme.cardBg, borderColor: theme.borderColor }]}>
+                      <TouchableOpacity style={[styles.templateInputNameTouchable, { borderBottomColor: theme.borderColor }]} onPress={() => { setEditingExTarget({ dayIndex, exIndex }); setSearchKeyword(ex.name); setIsSearchModalVisible(true); }}>
+                        <Text style={[styles.templateInputNameText, { color: ex.name ? theme.textMain : theme.textSub }]}>{ex.name ? ex.name : '운동 이름 선택'}</Text>
                       </TouchableOpacity>
                       <View style={styles.templateExerciseBottomRow}>
                         <View style={styles.templateExerciseInputs}>
                           {ex.type === 'WEIGHT' ? (
                             <>
-                              <TextInput style={styles.templateInputSmall} placeholder="kg" keyboardType="numeric" value={ex.weight?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'weight', val)} />
-                              <TextInput style={styles.templateInputSmall} placeholder="회" keyboardType="numeric" value={ex.reps?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'reps', val)} />
-                              <TextInput style={styles.templateInputSmall} placeholder="세트" keyboardType="numeric" value={ex.sets?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'sets', val)} />
+                              <View style={styles.exInputCol}>
+                                <Text style={[styles.exInputLabel, {color: theme.textSub}]}>무게(kg)</Text>
+                                <TextInput style={[styles.templateInputSmall, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.borderColor }]} keyboardType="numeric" value={ex.weight?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'weight', val)} />
+                              </View>
+                              <View style={styles.exInputCol}>
+                                <Text style={[styles.exInputLabel, {color: theme.textSub}]}>반복(회)</Text>
+                                <TextInput style={[styles.templateInputSmall, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.borderColor }]} keyboardType="numeric" value={ex.reps?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'reps', val)} />
+                              </View>
+                              <View style={styles.exInputCol}>
+                                <Text style={[styles.exInputLabel, {color: theme.textSub}]}>세트수</Text>
+                                <TextInput style={[styles.templateInputSmall, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.borderColor }]} keyboardType="numeric" value={ex.sets?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'sets', val)} />
+                              </View>
                             </>
                           ) : (
                             <>
-                              <TextInput style={styles.templateInputSmall} placeholder="분" keyboardType="numeric" value={ex.time?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'time', val)} />
-                              <TextInput style={styles.templateInputSmall} placeholder="속도" keyboardType="numeric" value={ex.speed?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'speed', val)} />
-                              <TextInput style={styles.templateInputSmall} placeholder="거리" keyboardType="numeric" value={ex.distance?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'distance', val)} />
+                              <View style={styles.exInputCol}>
+                                <Text style={[styles.exInputLabel, {color: theme.textSub}]}>시간(분)</Text>
+                                <TextInput style={[styles.templateInputSmall, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.borderColor }]} keyboardType="numeric" value={ex.time?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'time', val)} />
+                              </View>
+                              <View style={styles.exInputCol}>
+                                <Text style={[styles.exInputLabel, {color: theme.textSub}]}>속도</Text>
+                                <TextInput style={[styles.templateInputSmall, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.borderColor }]} keyboardType="numeric" value={ex.speed?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'speed', val)} />
+                              </View>
+                              <View style={styles.exInputCol}>
+                                <Text style={[styles.exInputLabel, {color: theme.textSub}]}>거리(km)</Text>
+                                <TextInput style={[styles.templateInputSmall, { backgroundColor: theme.inputBg, color: theme.textMain, borderColor: theme.borderColor }]} keyboardType="numeric" value={ex.distance?.toString()} onChangeText={(val) => updateTemplateExercise(dayIndex, exIndex, 'distance', val)} />
+                              </View>
                             </>
                           )}
                         </View>
                         <View style={styles.templateActionButtons}>
-                          <TouchableOpacity onPress={() => moveTemplateExercise(dayIndex, exIndex, -1)} style={styles.templateIconButton} disabled={exIndex === 0}><Ionicons name="chevron-up" size={22} color={exIndex === 0 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
-                          <TouchableOpacity onPress={() => moveTemplateExercise(dayIndex, exIndex, 1)} style={styles.templateIconButton} disabled={exIndex === dayExercises.length - 1}><Ionicons name="chevron-down" size={22} color={exIndex === dayExercises.length - 1 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
+                          <TouchableOpacity onPress={() => moveTemplateExercise(dayIndex, exIndex, -1)} style={styles.templateIconButton} disabled={exIndex === 0}><Ionicons name="chevron-up" size={24} color={exIndex === 0 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
+                          <TouchableOpacity onPress={() => moveTemplateExercise(dayIndex, exIndex, 1)} style={styles.templateIconButton} disabled={exIndex === dayExercises.length - 1}><Ionicons name="chevron-down" size={24} color={exIndex === dayExercises.length - 1 ? theme.borderColor : theme.textMain} /></TouchableOpacity>
                           <TouchableOpacity onPress={() => removeTemplateExercise(dayIndex, exIndex)} style={styles.templateIconButton}><Ionicons name="trash-outline" size={22} color="#f44336" /></TouchableOpacity>
                         </View>
                       </View>
@@ -641,56 +660,57 @@ export default function SettingsScreen() {
             ))}
           </ScrollView>
           <TouchableOpacity style={styles.modalSaveButton} onPress={handleSaveTemplate}><Text style={styles.modalSaveButtonText}>{editingTemplateId ? '수정 내용 저장' : '새 템플릿 저장 및 선택'}</Text></TouchableOpacity>
-        </Modal>
+        </View>
+      </Modal>
 
-        <Modal visible={isSearchModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setIsSearchModalVisible(false)} onShow={() => { setTimeout(() => { searchInputRef.current?.focus(); }, 100); }}>
-          <View style={styles.searchModalContainer}>
-            <View style={styles.searchHeader}>
-              <TouchableOpacity onPress={() => setIsSearchModalVisible(false)}><Ionicons name="close" size={28} color="#333" /></TouchableOpacity>
-              <Text style={styles.searchTitle}>운동 선택</Text>
-              <View style={{width: 28}} />
-            </View>
-            <View style={styles.searchInputWrapper}>
-              <Ionicons name="search" size={20} color="#888" style={{marginRight: 8}} />
-              <TextInput ref={searchInputRef} style={styles.searchInput} placeholder="운동 이름을 검색하거나 직접 입력하세요." value={searchKeyword} onChangeText={setSearchKeyword} />
-            </View>
-            {searchKeyword.trim() !== '' && !EXERCISE_DICTIONARY.includes(searchKeyword.trim()) && (
-              <TouchableOpacity style={styles.customAddBtn} onPress={() => handleSelectExerciseFromSearch(searchKeyword.trim())}>
-                <Ionicons name="add-circle" size={20} color="#fff" style={{marginRight: 6}} /><Text style={styles.customAddBtnText}>"{searchKeyword.trim()}" 직접 추가하기</Text>
-              </TouchableOpacity>
-            )}
-            <FlatList data={filteredExercises} keyExtractor={(item) => item} keyboardShouldPersistTaps="handled" renderItem={({item}) => (<TouchableOpacity style={styles.searchListItem} onPress={() => handleSelectExerciseFromSearch(item)}><Text style={styles.searchListText}>{item}</Text></TouchableOpacity>)} ListEmptyComponent={() => (<Text style={styles.searchEmptyText}>검색 결과가 없습니다.</Text>)} />
+      <Modal visible={isSearchModalVisible} animationType="slide" presentationStyle="pageSheet" onRequestClose={() => setIsSearchModalVisible(false)} onShow={() => { setTimeout(() => { searchInputRef.current?.focus(); }, 100); }}>
+        <View style={[{ flex: 1, backgroundColor: theme.bg, paddingTop: Platform.OS === 'android' ? insets.top : 0, paddingBottom: insets.bottom }]}>
+          <View style={[styles.searchHeader, { backgroundColor: theme.cardBg, borderBottomColor: theme.borderColor }]}>
+            <TouchableOpacity onPress={() => setIsSearchModalVisible(false)}><Ionicons name="close" size={28} color={theme.textMain} /></TouchableOpacity>
+            <Text style={[styles.searchTitle, { color: theme.textMain }]}>운동 선택</Text>
+            <View style={{width: 28}} />
           </View>
-        </Modal>
-
-        <PolicyModal visible={isPrivacyModalVisible} onClose={() => setIsPrivacyModalVisible(false)} />
-
-        <Modal visible={alertConfig.visible} transparent={true} animationType="fade" onRequestClose={closeAlert}>
-          <TouchableOpacity style={styles.alertBackdrop} activeOpacity={1} onPress={() => { if (alertConfig.dismissible) closeAlert(); }}>
-            <TouchableOpacity activeOpacity={1} onPress={(alertConfig.type === 'info' && alertConfig.dismissible) ? closeAlert : undefined}>
-              <View style={[styles.alertBox, {backgroundColor: theme.cardBg, borderRadius: theme.radius}]}>
-                <Text style={[styles.alertTitleText, {color: theme.textMain}]}>{alertConfig.title}</Text>
-                <Text style={[styles.alertMessageText, {color: theme.textSub}]}>{alertConfig.message}</Text>
-                {alertConfig.type === 'confirm' ? (
-                  <View style={styles.alertBtnRow}>
-                    <TouchableOpacity style={[styles.alertCancelBtn, {backgroundColor: theme.inputBg, borderRadius: theme.radius}]} onPress={closeAlert}><Text style={[styles.alertCancelText, {color: theme.textMain}]}>취소</Text></TouchableOpacity>
-                    <TouchableOpacity style={[styles.alertConfirmBtn, {backgroundColor: theme.accentPrimary, borderRadius: theme.radius}]} onPress={() => { if (alertConfig.onConfirm) alertConfig.onConfirm(); closeAlert(); }}><Text style={[styles.alertConfirmText, isDarkMode && {color: '#111'}]}>확인</Text></TouchableOpacity>
-                  </View>
-                ) : ( <Text style={styles.alertHintText}>아무 곳이나 터치하여 닫기</Text> )}
-              </View>
+          <View style={[styles.searchInputWrapper, { backgroundColor: theme.inputBg, borderColor: theme.borderColor }]}>
+            <Ionicons name="search" size={20} color={theme.textSub} style={{marginRight: 8}} />
+            <TextInput ref={searchInputRef} style={[styles.searchInput, { color: theme.textMain }]} placeholderTextColor={theme.textSub} placeholder="운동 이름을 검색하거나 직접 입력하세요." value={searchKeyword} onChangeText={setSearchKeyword} />
+          </View>
+          {searchKeyword.trim() !== '' && !EXERCISE_DICTIONARY.includes(searchKeyword.trim()) && (
+            <TouchableOpacity style={styles.customAddBtn} onPress={() => handleSelectExerciseFromSearch(searchKeyword.trim())}>
+              <Ionicons name="add-circle" size={20} color="#fff" style={{marginRight: 6}} /><Text style={styles.customAddBtnText}>"{searchKeyword.trim()}" 직접 추가하기</Text>
             </TouchableOpacity>
-          </TouchableOpacity>
-        </Modal>
+          )}
+          <FlatList data={filteredExercises} keyExtractor={(item) => item} keyboardShouldPersistTaps="handled" 
+            renderItem={({item}) => (<TouchableOpacity style={[styles.searchListItem, { backgroundColor: theme.cardBg, borderBottomColor: theme.borderColor }]} onPress={() => handleSelectExerciseFromSearch(item)}><Text style={[styles.searchListText, { color: theme.textMain }]}>{item}</Text></TouchableOpacity>)} 
+            ListEmptyComponent={() => (<Text style={[styles.searchEmptyText, { color: theme.textSub }]}>검색 결과가 없습니다.</Text>)} 
+          />
+        </View>
+      </Modal>
 
-      </ScrollView>
-    </SafeAreaView>
+      <PolicyModal visible={isPrivacyModalVisible} onClose={() => setIsPrivacyModalVisible(false)} />
+
+      <Modal visible={alertConfig.visible} transparent={true} animationType="fade" onRequestClose={closeAlert}>
+        <TouchableOpacity style={styles.alertBackdrop} activeOpacity={1} onPress={() => { if (alertConfig.dismissible) closeAlert(); }}>
+          <TouchableOpacity activeOpacity={1} onPress={(alertConfig.type === 'info' && alertConfig.dismissible) ? closeAlert : undefined}>
+            <View style={[styles.alertBox, {backgroundColor: theme.cardBg, borderRadius: theme.radius}]}>
+              <Text style={[styles.alertTitleText, {color: theme.textMain}]}>{alertConfig.title}</Text>
+              <Text style={[styles.alertMessageText, {color: theme.textSub}]}>{alertConfig.message}</Text>
+              {alertConfig.type === 'confirm' ? (
+                <View style={styles.alertBtnRow}>
+                  <TouchableOpacity style={[styles.alertCancelBtn, {backgroundColor: theme.inputBg, borderRadius: theme.radius}]} onPress={closeAlert}><Text style={[styles.alertCancelText, {color: theme.textMain}]}>취소</Text></TouchableOpacity>
+                  <TouchableOpacity style={[styles.alertConfirmBtn, {backgroundColor: theme.accentPrimary, borderRadius: theme.radius}]} onPress={() => { if (alertConfig.onConfirm) alertConfig.onConfirm(); closeAlert(); }}><Text style={[styles.alertConfirmText, isDarkMode && {color: '#111'}]}>확인</Text></TouchableOpacity>
+                </View>
+              ) : ( <Text style={styles.alertHintText}>아무 곳이나 터치하여 닫기</Text> )}
+            </View>
+          </TouchableOpacity>
+        </TouchableOpacity>
+      </Modal>
+
+    </View>
   );
 }
 
-// 스타일 코드는 기존과 완벽하게 동일합니다.
 const styles = StyleSheet.create({
   mainWrapper: { flex: 1 },
-  container: { flex: 1 },
   header: { marginBottom: 20, paddingHorizontal: 4 },
   headerSub: { fontSize: 14, marginBottom: 4, fontWeight: '500' },
   headerTitle: { fontSize: 26, fontWeight: '900', letterSpacing: -0.5 },
@@ -730,51 +750,55 @@ const styles = StyleSheet.create({
   activeBadgeText: { fontWeight: 'bold', fontSize: 13 },
   templateListDeleteBtn: { marginLeft: 12, padding: 4 },
 
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee', backgroundColor: '#fff' },
-  modalTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold' },
   modalCloseText: { fontSize: 16, color: '#f44336', fontWeight: 'bold' },
-  modalContent: { flex: 1, backgroundColor: '#f4f4f4', padding: 16 },
-  cycleSetupRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 16, borderRadius: 16, marginBottom: 12 },
-  nameInput: { flex: 1, marginLeft: 16, borderBottomWidth: 1, borderBottomColor: '#ddd', fontSize: 16, paddingVertical: 4, textAlign: 'right' },
+  modalContent: { flex: 1, padding: 16 },
+  cycleSetupRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderRadius: 16, marginBottom: 12 },
+  nameInput: { flex: 1, marginLeft: 16, borderBottomWidth: 1, fontSize: 16, paddingVertical: 4, textAlign: 'right' },
   cycleInput: { backgroundColor: '#FFF1F2', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8, fontSize: 18, fontWeight: 'bold', textAlign: 'center', width: 60, color: '#FF4D6D' },
-  dayCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, marginBottom: 16, elevation: 1 },
+  dayCard: { borderRadius: 16, padding: 16, marginBottom: 16, elevation: 1 },
   dayCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  dayCardTitle: { fontSize: 18, fontWeight: 'bold', color: '#222' },
+  dayCardTitle: { fontSize: 18, fontWeight: 'bold' },
   dayCardActions: { flexDirection: 'row', alignItems: 'center' },
   dayMoveBtn: { paddingHorizontal: 2 },
   addExerciseButton: { backgroundColor: '#FFF1F2', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, marginLeft: 8 },
   addExerciseButtonText: { color: '#FF4D6D', fontSize: 13, fontWeight: 'bold' },
   emptyDayText: { color: '#888', fontSize: 14, fontStyle: 'italic', textAlign: 'center', marginVertical: 10 },
-  templateExerciseCard: { backgroundColor: '#fff', padding: 14, borderRadius: 12, borderWidth: 1, borderColor: '#eee', marginBottom: 10 },
-  templateInputNameTouchable: { borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 8, marginBottom: 10, justifyContent: 'center' },
-  templateInputNameText: { fontSize: 16, fontWeight: 'bold', color: '#222' },
+  
+  templateExerciseCard: { padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
+  templateInputNameTouchable: { borderBottomWidth: 1, paddingBottom: 8, marginBottom: 10, justifyContent: 'center' },
+  templateInputNameText: { fontSize: 16, fontWeight: 'bold' },
   templateExerciseBottomRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   templateExerciseInputs: { flexDirection: 'row', flex: 1, gap: 6, marginRight: 10 },
-  templateInputSmall: { flex: 1, backgroundColor: '#f9f9f9', borderRadius: 8, fontSize: 14, textAlign: 'center', paddingVertical: 8, borderWidth: 1, borderColor: '#eee' },
+  
+  exInputCol: { flex: 1, alignItems: 'center' },
+  exInputLabel: { fontSize: 11, fontWeight: 'bold', marginBottom: 4 },
+  templateInputSmall: { width: '100%', borderRadius: 8, fontSize: 14, textAlign: 'center', paddingVertical: 8, borderWidth: 1 },
+  
   templateActionButtons: { flexDirection: 'row', alignItems: 'center' },
   templateIconButton: { padding: 4, marginLeft: 2 },
   modalSaveButton: { backgroundColor: '#FF4D6D', padding: 18, alignItems: 'center' },
   modalSaveButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
 
-  searchModalContainer: { flex: 1, backgroundColor: '#f4f4f4' },
-  searchHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
-  searchTitle: { fontSize: 18, fontWeight: 'bold', color: '#333' },
-  searchInputWrapper: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', margin: 16, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1, borderColor: '#ddd' },
-  searchInput: { flex: 1, fontSize: 16, color: '#333' },
+  searchHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
+  searchTitle: { fontSize: 18, fontWeight: 'bold' },
+  searchInputWrapper: { flexDirection: 'row', alignItems: 'center', margin: 16, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 16, borderWidth: 1 },
+  searchInput: { flex: 1, fontSize: 16 },
   customAddBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FF4D6D', marginHorizontal: 16, marginBottom: 16, padding: 14, borderRadius: 16, justifyContent: 'center' },
   customAddBtnText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  searchListItem: { backgroundColor: '#fff', padding: 16, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  searchListText: { fontSize: 16, color: '#333' },
-  searchEmptyText: { textAlign: 'center', color: '#999', marginTop: 40, fontSize: 15 },
+  searchListItem: { padding: 16, borderBottomWidth: 1 },
+  searchListText: { fontSize: 16 },
+  searchEmptyText: { textAlign: 'center', marginTop: 40, fontSize: 15 },
 
   alertBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  alertBox: { width: 300, backgroundColor: '#fff', padding: 24, borderRadius: 24, alignItems: 'center', elevation: 10 },
-  alertTitleText: { fontSize: 18, fontWeight: 'bold', color: '#333', marginBottom: 12, textAlign: 'center' },
-  alertMessageText: { fontSize: 15, color: '#555', textAlign: 'center', lineHeight: 22, marginBottom: 20 },
+  alertBox: { width: 300, padding: 24, borderRadius: 24, alignItems: 'center', elevation: 10 },
+  alertTitleText: { fontSize: 18, fontWeight: 'bold', marginBottom: 12, textAlign: 'center' },
+  alertMessageText: { fontSize: 15, textAlign: 'center', lineHeight: 22, marginBottom: 20 },
   alertHintText: { fontSize: 13, color: '#aaa', marginTop: 4, fontStyle: 'italic' },
   alertBtnRow: { flexDirection: 'row', width: '100%', justifyContent: 'space-between', gap: 10 },
-  alertCancelBtn: { flex: 1, backgroundColor: '#f0f0f0', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  alertCancelBtn: { flex: 1, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
   alertConfirmBtn: { flex: 1, backgroundColor: '#FF4D6D', paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
-  alertCancelText: { color: '#555', fontWeight: 'bold', fontSize: 15 },
+  alertCancelText: { fontWeight: 'bold', fontSize: 15 },
   alertConfirmText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
 });
