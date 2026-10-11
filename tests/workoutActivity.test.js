@@ -47,3 +47,16 @@ test('ignores malformed dates and empty imported exercise names', () => {
   );
   assert.deepEqual(activity, {});
 });
+
+test('REST status takes precedence over conflicting imported exercise rows', () => {
+  const activity = buildWorkoutActivityMap(
+    [{ date: '2026-09-01', status: 'REST' }],
+    [{ date: '2026-09-01', name: '스쿼트' }]
+  );
+  assert.deepEqual(activity, {});
+});
+
+test('exercise-only imported date appears in the calendar activity map', () => {
+  const activity = buildWorkoutActivityMap([], [{ date: '2026-09-01', name: '스쿼트' }]);
+  assert.deepEqual(activity, { '2026-09-01': 'COMPLETED' });
+});

@@ -24,10 +24,13 @@ export const buildWorkoutActivityMap = (dailyLogs = [], exerciseLogs = []) => {
       .map(exercise => exercise.date)
   );
   const activity = {};
+  const restDates = new Set();
 
   for (const log of dailyLogs) {
     if (!isWorkoutDateValue(log?.date)) continue;
-    if (log.status === 'COMPLETED') {
+    if (log.status === 'REST') {
+      restDates.add(log.date);
+    } else if (log.status === 'COMPLETED') {
       activity[log.date] = 'COMPLETED';
     } else if (log.status === 'IN_PROGRESS' && (exercisesByDate.has(log.date) || hasCheckedExercise(log.progress_json))) {
       activity[log.date] = 'IN_PROGRESS';
@@ -35,7 +38,7 @@ export const buildWorkoutActivityMap = (dailyLogs = [], exerciseLogs = []) => {
   }
 
   for (const date of exercisesByDate) {
-    if (!activity[date]) activity[date] = 'COMPLETED';
+    if (!activity[date] && !restDates.has(date)) activity[date] = 'COMPLETED';
   }
 
   return activity;

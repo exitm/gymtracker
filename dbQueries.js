@@ -218,16 +218,9 @@ export const deleteDailyLog = async (dateStr) => {
 
 export const getAllLogsForCalendar = async () => {
   const db = await getDB();
-  const rows = await db.getAllAsync(`SELECT date, status FROM daily_logs;`);
-  const map = {};
-  rows.forEach(item => {
-    if (item.status === 'IN_PROGRESS') {
-      map[item.date] = 'IN_PROGRESS';
-      return;
-    }
-    map[item.date] = item.status;
-  });
-  return map;
+  const dailyLogs = await db.getAllAsync(`SELECT date, status, progress_json FROM daily_logs;`);
+  const exerciseLogs = await db.getAllAsync(`SELECT date, name FROM exercise_logs;`);
+  return buildWorkoutActivityMap(dailyLogs, exerciseLogs);
 };
 
 export const getWorkoutActivityDates = async () => {
