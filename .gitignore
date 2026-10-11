@@ -10,6 +10,10 @@ web-build/
 expo-env.d.ts
 
 # Native
+nul
+screens/20260928.zip
+workout_tracker.db
+workout_tracker_v3.db
 .kotlin/
 *.orig.*
 *.jks
