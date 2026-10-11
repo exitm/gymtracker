@@ -4,6 +4,7 @@ import defaultRoutine from './assets/defaultRoutine.json';
 import { seedDefaultRoutineIfNeeded } from './utils/defaultRoutineSeeder';
 import { saveWorkoutProgressToDb } from './utils/workoutProgressPersistence';
 import { rolloverUnfinalizedWorkout } from './utils/routineRollover';
+import { buildWorkoutActivityMap, getWorkoutDates } from './utils/workoutActivity';
 
 let dbInstance = null;
 
@@ -229,22 +230,27 @@ export const getAllLogsForCalendar = async () => {
   return map;
 };
 
-export const getAllCompletedDatesForStats = async () => {
+export const getWorkoutActivityDates = async () => {
   const db = await getDB();
-  const rows = await db.getAllAsync(`SELECT date FROM daily_logs WHERE status = 'COMPLETED';`);
-  return rows.map(i => i.date);
+  const dailyLogs = await db.getAllAsync(`SELECT date, status, progress_json FROM daily_logs;`);
+  const exerciseLogs = await db.getAllAsync(`SELECT date, name FROM exercise_logs;`);
+  return getWorkoutDates(buildWorkoutActivityMap(dailyLogs, exerciseLogs));
 };
+
+// 기존 호출부와의 호환 유지: 반환 값은 완료/진행 중 운동 활동일 전체다.
+export const getAllCompletedDatesForStats = async () => getWorkoutActivityDates();
 
 export const getWeeklyLogsStatus = async (dateArr) => {
   if (!dateArr || dateArr.length === 0) return {};
   const db = await getDB();
   const placeholders = dateArr.map(() => '?').join(',');
-  const query = `SELECT date, status FROM daily_logs WHERE date IN (${placeholders});`;
-  const rows = await db.getAllAsync(query, dateArr);
-
-  const map = {};
-  rows.forEach(item => { map[item.date] = item.status; });
-  return map;
+  const logsQuery = `SELECT date, status, progress_json FROM daily_logs WHERE date IN (${placeholders});`;
+  const exercisesQuery = `SELECT date, name FROM exercise_logs WHERE date IN (${placeholders});`;
+  const [logs, exercises] = await Promise.all([
+    db.getAllAsync(logsQuery, dateArr),
+    db.getAllAsync(exercisesQuery, dateArr),
+  ]);
+  return buildWorkoutActivityMap(logs, exercises);
 };
 
 export const getRoutineByIndex = async (routineIndex) => {

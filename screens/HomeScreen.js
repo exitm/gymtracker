@@ -7,8 +7,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage'; 
 
-import { getSettings, getWeeklyLogsStatus, getAllCompletedDatesForStats, getWeeklyWaterAverage, getExercisesForDate, getDailyLogForDate, getWorkoutProgress, getActiveRoutineTemplate } from '../dbQueries';
+import { getSettings, getWeeklyLogsStatus, getWorkoutActivityDates, getWeeklyWaterAverage, getExercisesForDate, getDailyLogForDate, getWorkoutProgress, getActiveRoutineTemplate } from '../dbQueries';
 import { resolveTodayExerciseList } from '../utils/todayExerciseList';
+import { isWorkoutActivityStatus } from '../utils/workoutActivity';
 
 const { width } = Dimensions.get('window');
 
@@ -103,13 +104,13 @@ export default function HomeScreen() {
     setWeekDates(weekArr);
 
     const wStatus = await getWeeklyLogsStatus(dateStrArr);
-    setWeeklyStatus(wStatus);
 
-    let completedCount = 0;
-    for (const key in wStatus) { if (wStatus[key] === 'COMPLETED') completedCount++; }
+    const allCompletedDates = await getWorkoutActivityDates();
+    if (loadVersion !== dashboardLoadVersionRef.current) return;
+    setWeeklyStatus(wStatus);
+    const completedCount = dateStrArr.filter(date => isWorkoutActivityStatus(wStatus[date])).length;
     setWeeklyCompletedCount(completedCount);
 
-    const allCompletedDates = await getAllCompletedDatesForStats();
     let streak = 0;
     const checkDate = new Date(today);
     
@@ -127,7 +128,7 @@ export default function HomeScreen() {
     setCurrentStreak(streak);
 
     const currentMonthPrefix = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}`;
-    const thisMonthLogs = allCompletedDates.filter(d => d.startsWith(currentMonthPrefix));
+    const thisMonthLogs = allCompletedDates.filter(date => date.startsWith(currentMonthPrefix));
     const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
     setMonthlyProgress(Math.round((thisMonthLogs.length / daysInMonth) * 100));
 
@@ -226,7 +227,7 @@ export default function HomeScreen() {
           <View style={styles.weekRow}>
             {weekDates.map((day, idx) => {
               const status = weeklyStatus[day.dateStr];
-              const isCompleted = status === 'COMPLETED';
+              const isCompleted = isWorkoutActivityStatus(status);
               
               return (
                 <View key={idx} style={styles.dayItem}>
@@ -241,6 +242,14 @@ export default function HomeScreen() {
                       day.isToday && {color: isDarkMode ? '#111' : '#fff'},
                       day.dayName === '일' && !day.isToday && {color: theme.accentSecondary}
                     ]}>{day.dateNum}</Text>
+                    {isCompleted && (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={14}
+                        color={day.isToday ? (isDarkMode ? '#111317' : '#FFFFFF') : theme.success}
+                        style={{ position: 'absolute', right: -3, bottom: -3, backgroundColor: theme.cardBg, borderRadius: 7 }}
+                      />
+                    )}
                   </View>
                 </View>
               );
