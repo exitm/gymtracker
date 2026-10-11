@@ -1,10 +1,13 @@
 // database.js
 import * as SQLite from 'expo-sqlite';
 
-const db = SQLite.openDatabaseSync('workout_tracker.db');
+const DB_FILE = 'workout_tracker.db';
+const db = SQLite.openDatabaseSync(DB_FILE);
+console.log('DB 파일 경로:', DB_FILE, '존재 확인 필요');
 
 export const initDB = async () => {
   try {
+    // DB 파일 존재 확인 및 생성 보장 (openDatabaseSync는 파일이 없으면 자동 생성)
     await db.execAsync(`
       CREATE TABLE IF NOT EXISTS Settings (
         id INTEGER PRIMARY KEY NOT NULL,

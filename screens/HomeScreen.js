@@ -7,7 +7,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Circle } from 'react-native-svg';
 import AsyncStorage from '@react-native-async-storage/async-storage'; 
 
-import { getSettings, getWeeklyLogsStatus, getAllCompletedDatesForStats, getWeeklyWaterAverage, getExercisesForDate } from '../dbQueries';
+import { getSettings, getWeeklyLogsStatus, getAllCompletedDatesForStats, getWeeklyWaterAverage, getExercisesForDate, getDailyLogForDate, getWorkoutProgress, getActiveRoutineTemplate } from '../dbQueries';
+import { resolveTodayExerciseList } from '../utils/todayExerciseList';
 
 const { width } = Dimensions.get('window');
 
@@ -50,11 +51,29 @@ export default function HomeScreen() {
     return () => subscription.remove();
   }, []);
 
+  // 운동 화면이 전송한 전체 스냅샷은 새로고침 중에도 stale DB 조회로 덮지 않는다.
+  const latestWorkoutProgressRef = React.useRef(null);
+  const dashboardLoadVersionRef = React.useRef(0);
+
+  useEffect(() => {
+    const syncSubscription = DeviceEventEmitter.addListener('syncWorkoutProgress', (payload) => {
+      if (Array.isArray(payload)) {
+        latestWorkoutProgressRef.current = payload;
+        setTodayExercises(payload);
+      } else {
+        latestWorkoutProgressRef.current = null;
+        loadDashboardData();
+      }
+    });
+    return () => syncSubscription.remove();
+  }, []);
+
   useFocusEffect(
     useCallback(() => { loadDashboardData(); }, [])
   );
 
   const loadDashboardData = async () => {
+    const loadVersion = ++dashboardLoadVersionRef.current;
     const settings = await getSettings();
     // [수정] AsyncStorage를 우선 확인하여 이름 초기화 버그 방어
     const savedName = await AsyncStorage.getItem('userName');
@@ -116,12 +135,62 @@ export default function HomeScreen() {
     setWeeklyWaterAvg(waterAvg);
 
     const todayExData = await getExercisesForDate(todayStr);
-    setTodayExercises(todayExData);
+    const dailyLog = await getDailyLogForDate(todayStr);
+    let plannedExercises = [];
+    if ((!dailyLog || !['REST', 'COMPLETED', 'IN_PROGRESS'].includes(dailyLog.status)) && todayExData.length === 0) {
+      const template = await getActiveRoutineTemplate();
+      if (template?.routineData) {
+        const currentRoutineIndex = settings.current_routine_day_index || 0;
+        const calcIndex = currentRoutineIndex % (template.totalDays || 1);
+        plannedExercises = (template.routineData[calcIndex] || []).map((ex, index) => ({
+          id: `planned-${index}-${todayStr}`,
+          name: ex.name,
+          type: ex.type || 'WEIGHT',
+          weight: ex.weight?.toString() || '',
+          reps: ex.reps?.toString() || '',
+          sets: ex.sets?.toString() || '',
+          time: ex.time?.toString() || '',
+          speed: ex.speed?.toString() || '',
+          distance: ex.distance?.toString() || '',
+          isChecked: false,
+        }));
+      }
+    }
+
+    const draftExercises = dailyLog?.status === 'IN_PROGRESS'
+      ? await getWorkoutProgress(todayStr)
+      : null;
+    let legacyProgress = null;
+    try {
+      const progressStr = await AsyncStorage.getItem('today_workout_progress');
+      if (progressStr) legacyProgress = JSON.parse(progressStr);
+    } catch (error) {
+      console.log('진행 캐시 읽기 실패:', error);
+    }
+
+    if (loadVersion !== dashboardLoadVersionRef.current) return;
+    const finalTodayData = resolveTodayExerciseList({
+      dailyLog,
+      savedExercises: todayExData,
+      draftExercises,
+      legacyProgress,
+      today: todayStr,
+      plannedExercises,
+    });
+    const eventSnapshot = latestWorkoutProgressRef.current;
+    const visibleExercises = Array.isArray(eventSnapshot) ? eventSnapshot : finalTodayData;
+    setTodayExercises(visibleExercises);
   };
 
   const getFormatDetail = (ex) => {
-    if (ex.type === 'WEIGHT') return `${ex.actual_weight || 0}kg · ${ex.actual_reps || 0}회 · ${ex.actual_sets || 0}세트`;
-    return `${ex.actual_time || 0}분 · 속도 ${ex.actual_speed || 0}`;
+    // [수정 2] DB 기반(actual_*)과 템플릿 기반(weight/reps/time 등) 모두 호환
+    const w = ex.actual_weight ?? ex.weight ?? 0;
+    const r = ex.actual_reps ?? ex.reps ?? 0;
+    const s = ex.actual_sets ?? ex.sets ?? 0;
+    if (ex.type === 'WEIGHT') return `${w}kg · ${r}회 · ${s}세트`;
+    const t = ex.actual_time ?? ex.time ?? 0;
+    const sp = ex.actual_speed ?? ex.speed ?? 0;
+    return `${t}분 · 속도 ${sp}`;
   };
 
   const theme = {
@@ -234,27 +303,15 @@ export default function HomeScreen() {
             <TouchableOpacity onPress={() => navigation.navigate('운동')}><Text style={[styles.cardActionText, {color: theme.accentPrimary}]}>+ 운동 추가</Text></TouchableOpacity>
           </View>
 
-          {todayExercises.length === 0 ? (
-            <View style={[styles.card, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: theme.borderColor, alignItems: 'center', paddingVertical: 30}]}>
-              <Text style={styles.emptyWorkoutText}>아직 완료한 운동이 없어요.</Text>
-            </View>
-          ) : (
-            todayExercises.slice(0, 3).map((ex, idx) => (
-              <View key={idx} style={[styles.workoutItemCard, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: theme.borderColor}]}>
-                <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                  <Ionicons name={ex.type === 'WEIGHT' ? 'barbell' : 'walk'} size={20} color={theme.accentPrimary} style={{marginRight: 12}} />
-                  <Text style={[styles.workoutItemName, {color: theme.textMain}]}>{ex.name}</Text>
-                </View>
-                <Text style={[styles.workoutItemDetail, {color: theme.textSub}]}>{getFormatDetail(ex)}</Text>
+          {todayExercises.map((ex, idx) => (
+            <View key={idx} style={[styles.workoutItemCard, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: theme.borderColor}]}>
+              <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                <Ionicons name={ex.type === 'WEIGHT' ? 'barbell' : 'walk'} size={20} color={ex.isChecked ? theme.success : theme.accentPrimary} style={{marginRight: 12}} />
+                <Text style={[styles.workoutItemName, {color: theme.textMain}, ex.isChecked && {textDecorationLine: 'line-through', color: theme.textSub}]}>{ex.name}</Text>
               </View>
-            ))
-          )}
-          
-          {todayExercises.length > 3 && (
-            <TouchableOpacity onPress={() => navigation.navigate('운동')} style={styles.moreWorkoutBtn}>
-              <Text style={[styles.moreWorkoutBtnText, {color: theme.textSub}]}>...외 {todayExercises.length - 3}개 더보기</Text>
-            </TouchableOpacity>
-          )}
+              <Text style={[styles.workoutItemDetail, {color: theme.textSub}, ex.isChecked && {color: theme.success}]}>{getFormatDetail(ex)}</Text>
+            </View>
+          ))}
         </View>
 
       </ScrollView>

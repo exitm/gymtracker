@@ -1,0 +1,232 @@
+{
+  "name": "기본 루틴",
+  "totalDays": 3,
+  "routineData": [
+    [
+      {
+        "name": "걷기",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 10,
+        "speed": 6.5,
+        "distance": 0
+      },
+      {
+        "name": "친업",
+        "type": "WEIGHT",
+        "weight": 0,
+        "reps": 10,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "랫 풀다운 케이블",
+        "type": "WEIGHT",
+        "weight": 35,
+        "reps": 10,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "행잉 레그레이즈",
+        "type": "WEIGHT",
+        "weight": 0,
+        "reps": 15,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "달리기(러닝)",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 5,
+        "speed": 9.5,
+        "distance": 0
+      },
+      {
+        "name": "걷기",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 10,
+        "speed": 6.5,
+        "distance": 0
+      }
+    ],
+    [
+      {
+        "name": "걷기",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 10,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "체스트 프레스 머신",
+        "type": "WEIGHT",
+        "weight": 47,
+        "reps": 3,
+        "sets": 10,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "딥스",
+        "type": "WEIGHT",
+        "weight": 0,
+        "reps": 12,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "스미스 숄더 프레스",
+        "type": "WEIGHT",
+        "weight": 5,
+        "reps": 10,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "버터플라이 머신",
+        "type": "WEIGHT",
+        "weight": 50,
+        "reps": 10,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "행잉 레그레이즈",
+        "type": "WEIGHT",
+        "weight": 0,
+        "reps": 15,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "달리기(러닝)",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 5,
+        "speed": 9.5,
+        "distance": 0
+      },
+      {
+        "name": "걷기",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 10,
+        "speed": 6.5,
+        "distance": 0
+      }
+    ],
+    [
+      {
+        "name": "걷기",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 10,
+        "speed": 6.5,
+        "distance": 0
+      },
+      {
+        "name": "시티드 레터럴 레이즈 머신",
+        "type": "WEIGHT",
+        "weight": 7.5,
+        "reps": 12,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "리버스 펙덱 플라이",
+        "type": "WEIGHT",
+        "weight": 25,
+        "reps": 10,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "로프 프레스 다운",
+        "type": "WEIGHT",
+        "weight": 35,
+        "reps": 10,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "이지바 컬",
+        "type": "WEIGHT",
+        "weight": 20,
+        "reps": 10,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "행잉 레그레이즈",
+        "type": "WEIGHT",
+        "weight": 0,
+        "reps": 15,
+        "sets": 3,
+        "time": 0,
+        "speed": 0,
+        "distance": 0
+      },
+      {
+        "name": "달리기(러닝)",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 5,
+        "speed": 9.5,
+        "distance": 0
+      },
+      {
+        "name": "걷기",
+        "type": "CARDIO",
+        "weight": 0,
+        "reps": 0,
+        "sets": 0,
+        "time": 10,
+        "speed": 6.5,
+        "distance": 0
+      }
+    ]
+  ]
+}

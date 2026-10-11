@@ -7,6 +7,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy'; 
 import * as Sharing from 'expo-sharing';
 import * as Location from 'expo-location';
+import * as Notifications from 'expo-notifications';
 import * as DocumentPicker from 'expo-document-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage'; 
@@ -17,7 +18,8 @@ import {
   deleteRoutineTemplate, restoreSettingsAndTemplates,
   exportWorkoutLogsJSON, restoreWorkoutLogsJSON 
 } from '../dbQueries';
-import PolicyModal from '../components/PolicyModal'; 
+import PolicyModal from '../components/PolicyModal';
+import { createBackupFilename } from '../utils/backupFilename';
 
 const GEOFENCING_TASK = 'GYM_GEOFENCING_TASK';
 
@@ -109,43 +111,67 @@ export default function SettingsScreen() {
 
   const checkGeofencingStatus = async () => {
     try {
-      const { status } = await Location.getBackgroundPermissionsAsync();
-      if (status === 'granted') {
-        const isRegistered = await Location.hasStartedGeofencingAsync(GEOFENCING_TASK);
-        setIsGeofencingActive(isRegistered);
-      } else {
-        setIsGeofencingActive(false);
-      }
+      const isRegistered = await Location.hasStartedGeofencingAsync(GEOFENCING_TASK);
+      setIsGeofencingActive(isRegistered);
     } catch (error) {
+      console.error('지오펜싱 상태 확인 실패:', error);
       setIsGeofencingActive(false);
     }
   };
 
   const handleRegisterGymLocation = async () => {
     try {
-      let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') return showAlert('권한 필요', '위치 정보 접근 권한이 필요합니다.', 'info');
-      
-      let backStatus = await Location.requestBackgroundPermissionsAsync();
-      if (backStatus.status !== 'granted') return showAlert('권한 필요', '앱을 껐을 때도 알림을 받으려면 설정에서 위치 권한을 "항상 허용"으로 변경해주세요.', 'info');
+      const foreground = await Location.requestForegroundPermissionsAsync();
+      if (foreground.status !== 'granted') {
+        return showAlert('권한 필요', '헬스장 위치를 등록하려면 위치 권한을 허용해 주세요.', 'info');
+      }
+
+      if (Platform.OS === 'android' && foreground.android?.accuracy !== 'fine') {
+        return showAlert('정확한 위치 필요', '헬스장 도착 알림을 사용하려면 앱 위치 권한에서 ‘정확한 위치’를 허용해 주세요.', 'info');
+      }
 
       showAlert('위치 탐색 중', '현재 위치를 탐색하고 있습니다.\n잠시만 기다려 주세요.', 'info', null, false);
-      let location = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-      const lat = location.coords.latitude; 
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+        mayShowUserSettingsDialog: true,
+      });
+      const lat = location.coords.latitude;
       const lng = location.coords.longitude;
-      
-      await updateSetting('gym_lat', lat); 
-      await updateSetting('gym_lng', lng);
-      setGymLat(lat); 
-      setGymLng(lng);
-      
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) throw new Error('현재 위치 좌표를 확인할 수 없습니다.');
+
+      if (Platform.OS === 'android') {
+        const background = await Location.requestBackgroundPermissionsAsync();
+        if (background.status !== 'granted') {
+          closeAlert();
+          return showAlert('백그라운드 위치 권한 필요', '헬스장 도착 알림은 앱이 닫힌 상태에서도 위치를 확인해야 합니다. 위치 권한을 “항상 허용”으로 바꾼 뒤 다시 등록해 주세요.', 'info');
+        }
+      }
+
+      const notificationPermission = await Notifications.requestPermissionsAsync();
+      if (notificationPermission.status !== 'granted') {
+        closeAlert();
+        return showAlert('알림 권한 필요', '헬스장에 도착해도 알림을 표시할 수 없습니다. 앱 알림을 허용한 후 다시 등록해 주세요.', 'info');
+      }
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('gym-reminders', {
+          name: '헬스장 도착 알림',
+          importance: Notifications.AndroidImportance.DEFAULT,
+        });
+      }
+
       await Location.startGeofencingAsync(GEOFENCING_TASK, [{
-        identifier: 'MyGym', latitude: lat, longitude: lng, radius: 50, notifyOnEnter: true, notifyOnExit: true,
+        identifier: 'MyGym', latitude: lat, longitude: lng, radius: 100, notifyOnEnter: true, notifyOnExit: false,
       }]);
+      await updateSetting('gym_lat', lat);
+      await updateSetting('gym_lng', lng);
+      setGymLat(lat);
+      setGymLng(lng);
       setIsGeofencingActive(true);
-      showAlert('등록 완료', '현재 위치가 내 헬스장으로 등록되었습니다!', 'info');
-    } catch (error) { 
-      showAlert('오류', '위치를 가져오거나 지오펜싱을 설정하는데 실패했습니다.', 'info'); 
+      showAlert('등록 완료', '현재 위치를 헬스장으로 등록했습니다. 100m 이내에 도착하면 알림을 보냅니다.', 'info');
+    } catch (error) {
+      console.error('헬스장 위치·지오펜싱 등록 실패:', error);
+      closeAlert();
+      showAlert('오류', `헬스장 알림을 설정하지 못했습니다.\n${error?.message || '위치 권한, GPS 설정을 확인해 주세요.'}`, 'info');
     }
   };
 
@@ -194,7 +220,8 @@ export default function SettingsScreen() {
   const handleBackupDB = async () => {
     try {
       const jsonString = await exportWorkoutLogsJSON();
-      const filePath = `${FileSystem.cacheDirectory}Workout_DB_Backup.json`;
+      const fileName = createBackupFilename('Workout_DB_Backup');
+      const filePath = `${FileSystem.cacheDirectory}${fileName}`;
       await FileSystem.writeAsStringAsync(filePath, jsonString, { encoding: 'utf8' });
       const isAvailable = await Sharing.isAvailableAsync();
       if (isAvailable) await Sharing.shareAsync(filePath, { dialogTitle: '운동 기록 DB 백업 (JSON)' });
@@ -205,7 +232,7 @@ export default function SettingsScreen() {
 
   const handleRestoreDB = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({ type: ['*/*', 'application/json', 'application/octet-stream'], copyToCacheDirectory: true });
+      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
       if (result.canceled || !result.assets || result.assets.length === 0) return;
       const fileUri = result.assets[0].uri;
       
@@ -234,7 +261,8 @@ export default function SettingsScreen() {
       }
       const exportData = { settings, templates: fullTemplates };
       const jsonString = JSON.stringify(exportData, null, 2);
-      const filePath = `${FileSystem.cacheDirectory}Workout_Settings_Backup.json`;
+      const fileName = createBackupFilename('Workout_Settings_Backup');
+      const filePath = `${FileSystem.cacheDirectory}${fileName}`;
       await FileSystem.writeAsStringAsync(filePath, jsonString, { encoding: 'utf8' });
       const isAvailable = await Sharing.isAvailableAsync();
       if (isAvailable) await Sharing.shareAsync(filePath, { dialogTitle: '설정 및 템플릿 백업' });
@@ -243,7 +271,7 @@ export default function SettingsScreen() {
 
   const handleRestoreSettings = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({ type: ['*/*', 'application/json', 'application/octet-stream'], copyToCacheDirectory: true });
+      const result = await DocumentPicker.getDocumentAsync({ type: '*/*', copyToCacheDirectory: true });
       if (result.canceled || !result.assets || result.assets.length === 0) return;
       const fileUri = result.assets[0].uri;
 
@@ -393,10 +421,13 @@ export default function SettingsScreen() {
         Alert.alert('저장 완료', '새로운 템플릿이 저장되었습니다!'); 
       }
       
-      await AsyncStorage.setItem('template_update_time', Date.now().toString()); 
-      setRoutineModalVisible(false); 
+      await AsyncStorage.setItem('template_update_time', Date.now().toString());
+      // [수정] 새 등록/수정 시 루틴 날짜를 1일차로 초기화
+      await updateSetting('current_routine_day_index', 0);
+      setRoutineModalVisible(false);
       loadData(); 
-    } catch (error) { 
+    } catch (error) {
+      console.error("저장 오류 상세:", error);  // [수정] 오류 원인 확인용 로그 추가
       Alert.alert('오류', '데이터를 저장하는 중 문제가 발생했습니다.');
     }
   };

@@ -1,11 +1,15 @@
 // dbQueries.js
 import * as SQLite from 'expo-sqlite';
+import defaultRoutine from './assets/defaultRoutine.json';
+import { seedDefaultRoutineIfNeeded } from './utils/defaultRoutineSeeder';
+import { saveWorkoutProgressToDb } from './utils/workoutProgressPersistence';
+import { rolloverUnfinalizedWorkout } from './utils/routineRollover';
 
 let dbInstance = null;
 
 const getDB = async () => {
   if (!dbInstance) {
-    dbInstance = await SQLite.openDatabaseAsync('workout_tracker_v3.db');
+    dbInstance = await SQLite.openDatabaseAsync('workout_tracker.db');
   }
   return dbInstance;
 };
@@ -21,7 +25,7 @@ export const initDB = async () => {
         key TEXT PRIMARY KEY, value TEXT
       );
       CREATE TABLE IF NOT EXISTS daily_logs (
-        date TEXT PRIMARY KEY, status TEXT, memo TEXT, water_consumed INTEGER DEFAULT 0
+        date TEXT PRIMARY KEY, status TEXT, memo TEXT, water_consumed INTEGER DEFAULT 0, progress_json TEXT, routine_advanced INTEGER NOT NULL DEFAULT 0
       );
       CREATE TABLE IF NOT EXISTS exercise_logs (
         id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT, name TEXT, type TEXT, 
@@ -35,6 +39,21 @@ export const initDB = async () => {
         weight REAL, reps REAL, sets REAL, time REAL, speed REAL, distance REAL
       );
     `);
+    const dailyLogColumns = await db.getAllAsync(`PRAGMA table_info(daily_logs);`);
+    if (!dailyLogColumns.some(column => column.name === 'progress_json')) {
+      await db.execAsync(`ALTER TABLE daily_logs ADD COLUMN progress_json TEXT;`);
+    }
+    if (!dailyLogColumns.some(column => column.name === 'routine_advanced')) {
+      await db.execAsync(`ALTER TABLE daily_logs ADD COLUMN routine_advanced INTEGER NOT NULL DEFAULT 0;`);
+    }
+    if (dailyLogColumns.length > 0) {
+      await db.execAsync(`
+        UPDATE daily_logs
+        SET routine_advanced = 1
+        WHERE status = 'COMPLETED' AND routine_advanced = 0;
+      `);
+    }
+    await seedDefaultRoutineIfNeeded(db, defaultRoutine);
     return true;
   } catch (error) {
     console.error('DB Initialization Error:', error);
@@ -93,9 +112,73 @@ export const getDailyLogForDate = async (dateStr) => {
   return row || null;
 };
 
+export const advanceRoutineForUnfinalizedWorkout = async (dateStr, totalDays) => {
+  const db = await getDB();
+  return rolloverUnfinalizedWorkout(db, dateStr, null, totalDays);
+};
+
 export const getExercisesForDate = async (dateStr) => {
   const db = await getDB();
   return await db.getAllAsync(`SELECT * FROM exercise_logs WHERE date = ?;`, [dateStr]);
+};
+
+export const getWorkoutProgress = async (dateStr) => {
+  const db = await getDB();
+  const row = await db.getFirstAsync(`SELECT progress_json FROM daily_logs WHERE date = ?;`, [dateStr]);
+  if (!row?.progress_json) return null;
+  try {
+    const parsed = JSON.parse(row.progress_json);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch (error) {
+    console.error('Invalid workout progress JSON:', error);
+    return null;
+  }
+};
+
+export const saveWorkoutProgress = async (dateStr, memo, exercises, waterConsumed) => {
+  const db = await getDB();
+  return saveWorkoutProgressToDb(db, { date: dateStr, memo, exercises, waterConsumed });
+};
+
+export const completeWorkoutLog = async (dateStr, memo, exercises, waterConsumed) => {
+  const db = await getDB();
+  const checkedExercises = (Array.isArray(exercises) ? exercises : [])
+    .filter(exercise => exercise.isChecked && exercise.name?.trim());
+  await db.withExclusiveTransactionAsync(async transaction => {
+    const priorLog = await transaction.getFirstAsync(
+      `SELECT status, routine_advanced FROM daily_logs WHERE date = ?;`,
+      [dateStr]
+    );
+    const hasAlreadyAdvanced = priorLog?.routine_advanced === 1;
+    const shouldAdvance = checkedExercises.length > 0 && priorLog?.status !== 'COMPLETED' && !hasAlreadyAdvanced;
+    await transaction.runAsync(
+      `INSERT OR REPLACE INTO daily_logs (date, status, memo, water_consumed, progress_json, routine_advanced) VALUES (?, 'COMPLETED', ?, ?, NULL, ?);`,
+      [dateStr, memo, waterConsumed, shouldAdvance || hasAlreadyAdvanced ? 1 : 0]
+    );
+    await transaction.runAsync(`DELETE FROM exercise_logs WHERE date = ?;`, [dateStr]);
+    for (const exercise of checkedExercises) {
+      await transaction.runAsync(
+        `INSERT INTO exercise_logs (date, name, type, actual_weight, actual_reps, actual_sets, actual_time, actual_speed, actual_distance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`,
+        [dateStr, exercise.name.trim(), exercise.type || 'WEIGHT', parseFloat(exercise.weight) || 0, parseFloat(exercise.reps) || 0, parseFloat(exercise.sets) || 0, parseFloat(exercise.time) || 0, parseFloat(exercise.speed) || 0, parseFloat(exercise.distance) || 0]
+      );
+    }
+
+    if (shouldAdvance) {
+      const settingsRow = await transaction.getFirstAsync(
+        `SELECT value FROM settings WHERE key = 'current_routine_day_index';`
+      );
+      const template = await getActiveRoutineTemplate();
+      if (template?.totalDays) {
+        const currentIndex = Number.parseInt(settingsRow?.value || '0', 10) || 0;
+        const nextIndex = (currentIndex + 1) % template.totalDays;
+        await transaction.runAsync(
+          `INSERT OR REPLACE INTO settings (key, value) VALUES ('current_routine_day_index', ?);`,
+          [String(nextIndex)]
+        );
+      }
+    }
+  });
+  return true;
 };
 
 export const saveWorkoutLog = async (dateStr, status, memo, exercises, waterConsumed) => {
@@ -118,7 +201,7 @@ export const saveWorkoutLog = async (dateStr, status, memo, exercises, waterCons
 export const saveRestDayLog = async (dateStr, memo, waterConsumed) => {
   const db = await getDB();
   await db.runAsync(
-    `INSERT OR REPLACE INTO daily_logs (date, status, memo, water_consumed) VALUES (?, 'REST', ?, ?);`,
+    `INSERT OR REPLACE INTO daily_logs (date, status, memo, water_consumed, progress_json, routine_advanced) VALUES (?, 'REST', ?, ?, NULL, 0);`,
     [dateStr, memo, waterConsumed]
   );
   await db.runAsync(`DELETE FROM exercise_logs WHERE date = ?;`, [dateStr]);
@@ -136,7 +219,13 @@ export const getAllLogsForCalendar = async () => {
   const db = await getDB();
   const rows = await db.getAllAsync(`SELECT date, status FROM daily_logs;`);
   const map = {};
-  rows.forEach(item => { map[item.date] = item.status; });
+  rows.forEach(item => {
+    if (item.status === 'IN_PROGRESS') {
+      map[item.date] = 'IN_PROGRESS';
+      return;
+    }
+    map[item.date] = item.status;
+  });
   return map;
 };
 
@@ -152,10 +241,45 @@ export const getWeeklyLogsStatus = async (dateArr) => {
   const placeholders = dateArr.map(() => '?').join(',');
   const query = `SELECT date, status FROM daily_logs WHERE date IN (${placeholders});`;
   const rows = await db.getAllAsync(query, dateArr);
-  
+
   const map = {};
   rows.forEach(item => { map[item.date] = item.status; });
   return map;
+};
+
+export const getRoutineByIndex = async (routineIndex) => {
+  const template = await getActiveRoutineTemplate();
+  if (!template || !template.totalDays) return null;
+  const dayIndex = ((Number(routineIndex) % template.totalDays) + template.totalDays) % template.totalDays;
+  return { ...template, dayIndex, exercises: template.routineData[dayIndex] || [] };
+};
+
+export const getRoutineDayCount = async () => {
+  const template = await getActiveRoutineTemplate();
+  return template?.totalDays || 0;
+};
+
+export const applyWorkoutRoutineRollover = async (dateStr, nextDateStr, totalDays) => {
+  const routineDays = Number(totalDays) || (await getActiveRoutineTemplate())?.totalDays;
+  if (!routineDays) return { advanced: false, routineIndex: 0 };
+  const db = await getDB();
+  return rolloverUnfinalizedWorkout(db, dateStr, nextDateStr, routineDays);
+};
+
+export const getDailyLogHistory = async (dateStr) => {
+  const db = await getDB();
+  const dailyLog = await db.getFirstAsync(`SELECT * FROM daily_logs WHERE date = ?;`, [dateStr]);
+  const savedExercises = await db.getAllAsync(`SELECT * FROM exercise_logs WHERE date = ?;`, [dateStr]);
+  let progressExercises = null;
+  if (dailyLog?.progress_json) {
+    try {
+      const parsed = JSON.parse(dailyLog.progress_json);
+      if (Array.isArray(parsed)) progressExercises = parsed;
+    } catch (error) {
+      console.error('Invalid workout progress JSON:', error);
+    }
+  }
+  return { dailyLog, savedExercises, progressExercises };
 };
 
 export const getWeeklyWaterAverage = async () => {
@@ -320,8 +444,8 @@ export const restoreWorkoutLogsJSON = async (parsedData) => {
   if (parsedData.dailyLogs && Array.isArray(parsedData.dailyLogs)) {
     for (const log of parsedData.dailyLogs) {
       await db.runAsync(
-        `INSERT OR REPLACE INTO daily_logs (date, status, memo, water_consumed) VALUES (?, ?, ?, ?);`,
-        [log.date, log.status, log.memo, log.water_consumed]
+        `INSERT OR REPLACE INTO daily_logs (date, status, memo, water_consumed, progress_json, routine_advanced) VALUES (?, ?, ?, ?, ?, ?);`,
+        [log.date, log.status, log.memo, log.water_consumed, log.progress_json || null, log.routine_advanced || 0]
       );
     }
   }

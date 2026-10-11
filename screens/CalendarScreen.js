@@ -10,7 +10,7 @@ import * as ImagePicker from 'expo-image-picker';
 import ViewShot from 'react-native-view-shot';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { getAllLogsForCalendar, getExercisesForDate, getDailyLogForDate, deleteDailyLog, getSettings } from '../dbQueries';
+import { getAllLogsForCalendar, getExercisesForDate, getDailyLogForDate, getWorkoutProgress, deleteDailyLog, getSettings } from '../dbQueries';
 
 LocaleConfig.locales['kr'] = {
   monthNames: ['1월','2월','3월','4월','5월','6월','7월','8월','9월','10월','11월','12월'],
@@ -68,9 +68,10 @@ export default function CalendarScreen() {
 
   const fetchDailyData = async (dateStr) => {
     const exData = await getExercisesForDate(dateStr);
-    setExercises(exData);
     const logData = await getDailyLogForDate(dateStr);
-    if (logData) { setMemo(logData.memo); setIsRestDay(logData.status === 'REST'); } 
+    const draft = logData?.status === 'IN_PROGRESS' ? await getWorkoutProgress(dateStr) : null;
+    setExercises(logData?.status === 'IN_PROGRESS' && Array.isArray(draft) ? draft : exData);
+    if (logData) { setMemo(logData.memo || ''); setIsRestDay(logData.status === 'REST'); }
     else { setMemo(''); setIsRestDay(false); }
   };
 
@@ -200,8 +201,12 @@ export default function CalendarScreen() {
 
               // 🌟 수정: 휴식(REST) 처리 로직 삭제. 오직 COMPLETED(운동완료)일 때만 배경색을 채웁니다.
               if (status === 'COMPLETED') {
-                cellBg = theme.accentPrimary; 
+                cellBg = theme.accentPrimary;
                 cellText = isDarkMode ? '#111317' : '#FFFFFF';
+              } else if (status === 'IN_PROGRESS') {
+                cellBg = isDarkMode ? '#20303A' : '#E8F5E9';
+                cellBorder = theme.success;
+                bWidth = 2;
               }
 
               if (isToday) {

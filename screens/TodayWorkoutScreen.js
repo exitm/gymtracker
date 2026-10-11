@@ -10,7 +10,7 @@ import ViewShot from 'react-native-view-shot';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage'; 
 
-import { saveWorkoutLog, saveRestDayLog, getDailyLogForDate, getExercisesForDate, getActiveRoutineTemplate, getSettings, deleteDailyLog, updateSetting } from '../dbQueries';
+import { completeWorkoutLog, saveWorkoutProgress, getWorkoutProgress, saveRestDayLog, getDailyLogForDate, getExercisesForDate, getActiveRoutineTemplate, getSettings, deleteDailyLog, applyWorkoutRoutineRollover } from '../dbQueries';
 
 const EXERCISE_DICTIONARY = [
   '로슨 플랫 체스트', '로슨 인클라인 체스트', '체스트 프레스 머신', '인클라인 체스트 프레스 머신', '펙덱 플라이', '벤치프레스', '인클라인 벤치프레스', '덤벨 플라이', '딥스', '케이블 크로스 오버',
@@ -52,16 +52,44 @@ export default function TodayWorkoutScreen() {
 
   const today = new Date();
   const dbDateString = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const previousDateString = (() => {
+    const previousDate = new Date(today);
+    previousDate.setDate(previousDate.getDate() - 1);
+    return `${previousDate.getFullYear()}-${String(previousDate.getMonth() + 1).padStart(2, '0')}-${String(previousDate.getDate()).padStart(2, '0')}`;
+  })();
   const displayDateString = `${today.getMonth() + 1}월 ${today.getDate()}일`;
   const dayString = ['일', '월', '화', '수', '목', '금', '토'][today.getDay()] + '요일';
 
   const isDataLoadedRef = useRef(false);
   const loadedDateRef = useRef(null);
+
   const timerRef = useRef(null); 
   const appState = useRef(AppState.currentState);
   const lastUpdateRef = useRef(null);
   const currentRoutineIndexRef = useRef(0); 
   const activeTemplateRef = useRef(null); 
+  const saveQueueRef = useRef(Promise.resolve());
+  const exercisesRef = useRef([]);
+  const memoRef = useRef('');
+  const waterConsumedRef = useRef(0);
+  const draftSaveVersionRef = useRef(0);
+  const finalizingRef = useRef(false);
+
+  const commitExercises = (nextExercises) => {
+    exercisesRef.current = nextExercises;
+    setExercises(nextExercises);
+    return nextExercises;
+  };
+
+  const commitMemo = (nextMemo) => {
+    memoRef.current = nextMemo;
+    setMemo(nextMemo);
+  };
+
+  const commitWaterConsumed = (nextValue) => {
+    waterConsumedRef.current = nextValue;
+    setWaterConsumed(nextValue);
+  };
 
   const showAlert = (title, message, type = 'info', onConfirm = null) => { setAlertConfig({ visible: true, title, message, type, onConfirm }); };
   const closeAlert = () => setAlertConfig(prev => ({ ...prev, visible: false }));
@@ -108,12 +136,23 @@ export default function TodayWorkoutScreen() {
       const checkUpdateAndLoad = async () => {
         const updateTime = await AsyncStorage.getItem('template_update_time');
         if (updateTime !== lastUpdateRef.current || loadedDateRef.current !== dbDateString) {
-          isDataLoadedRef.current = false; 
+          const previousLoadedDate = loadedDateRef.current;
+          if (previousLoadedDate === previousDateString) {
+            await saveQueueRef.current.catch(() => undefined);
+            const routine = await getActiveRoutineTemplate();
+            if (routine?.totalDays) {
+              await applyWorkoutRoutineRollover(previousLoadedDate, dbDateString, routine.totalDays);
+            }
+          }
+          isDataLoadedRef.current = false;
           loadedDateRef.current = dbDateString;
           lastUpdateRef.current = updateTime;
-          loadTodayData(true); 
+          finalizingRef.current = false;
+          draftSaveVersionRef.current = 0;
+          saveQueueRef.current = Promise.resolve();
+          await loadTodayData(true);
         } else if (!isDataLoadedRef.current) {
-          loadTodayData();
+          await loadTodayData();
         }
       };
       checkUpdateAndLoad();
@@ -134,21 +173,29 @@ export default function TodayWorkoutScreen() {
 
     const dailyLog = await getDailyLogForDate(dbDateString);
     if (dailyLog) {
-      setMemo(dailyLog.memo || '');
-      setWaterConsumed(dailyLog.water_consumed || 0);
+      commitMemo(dailyLog.memo || '');
+      commitWaterConsumed(dailyLog.water_consumed || 0);
 
       if (dailyLog.status === 'REST') {
-        setExercises([]); setIsRestDay(true); setIsWorkoutCompleted(false); isDataLoadedRef.current = true; return;
+        commitExercises([]); setIsRestDay(true); setIsWorkoutCompleted(false); isDataLoadedRef.current = true; return;
       } else if (dailyLog.status === 'COMPLETED') {
         const savedExercises = await getExercisesForDate(dbDateString);
         const formatted = savedExercises.map(ex => ({
-          id: ex.id, name: ex.name, type: ex.type, weight: ex.actual_weight?.toString() || '', reps: ex.actual_reps?.toString() || '', sets: ex.actual_sets?.toString() || '', speed: ex.actual_speed?.toString() || '', time: ex.actual_time?.toString() || '', distance: ex.actual_distance?.toString() || '', isChecked: true 
+          id: ex.id, name: ex.name, type: ex.type, weight: ex.actual_weight?.toString() || '', reps: ex.actual_reps?.toString() || '', sets: ex.actual_sets?.toString() || '', speed: ex.actual_speed?.toString() || '', time: ex.actual_time?.toString() || '', distance: ex.actual_distance?.toString() || '', isChecked: true
         }));
-        setExercises(formatted); setIsRestDay(false); setIsWorkoutCompleted(true); isDataLoadedRef.current = true; return;
+        commitExercises(formatted); setIsRestDay(false); setIsWorkoutCompleted(true); isDataLoadedRef.current = true; return;
+      } else if (dailyLog.status === 'IN_PROGRESS') {
+        const draftExercises = await getWorkoutProgress(dbDateString);
+        if (draftExercises?.length) {
+          commitExercises(draftExercises);
+          setIsRestDay(false); setIsWorkoutCompleted(false); isDataLoadedRef.current = true; return;
+        }
       }
     }
 
-    setIsRestDay(false); setMemo(''); setWaterConsumed(0); setIsWorkoutCompleted(false);
+    setIsRestDay(false); commitMemo(''); commitWaterConsumed(0); setIsWorkoutCompleted(false); finalizingRef.current = false; draftSaveVersionRef.current = 0; saveQueueRef.current = Promise.resolve();
+    await AsyncStorage.removeItem('today_workout_progress');
+    await AsyncStorage.removeItem('workout_sync_time');
     
     const template = await getActiveRoutineTemplate();
     activeTemplateRef.current = template; 
@@ -159,13 +206,45 @@ export default function TodayWorkoutScreen() {
       const formatted = plannedExercises.map((ex, index) => ({
         id: Date.now() + index, name: ex.name, type: ex.type, weight: ex.weight?.toString() || '', reps: ex.reps?.toString() || '', sets: ex.sets?.toString() || '', time: ex.time?.toString() || '', speed: ex.speed?.toString() || '', distance: ex.distance?.toString() || '', isChecked: false 
       }));
-      setExercises(formatted);
-    } else { setExercises([]); }
-    isDataLoadedRef.current = true; 
+      commitExercises(formatted);
+    } else { commitExercises([]); }
+    isDataLoadedRef.current = true;
   };
 
-  const drinkWater = () => { if (waterConsumed < waterGoal) setWaterConsumed(prev => prev + 100); };
-  const waterLeft = Math.max(waterGoal - waterConsumed, 0); 
+  const saveDraftSnapshot = (nextExercises = exercisesRef.current) => {
+    if (!isDataLoadedRef.current || isRestDay || finalizingRef.current || isWorkoutCompleted) return Promise.resolve();
+
+    const snapshot = {
+      date: dbDateString,
+      memo: memoRef.current,
+      exercises: nextExercises,
+      waterConsumed: waterConsumedRef.current,
+    };
+    const version = ++draftSaveVersionRef.current;
+    const pendingSave = saveQueueRef.current
+      .catch(() => undefined)
+      .then(async () => {
+        if (version !== draftSaveVersionRef.current || finalizingRef.current) return;
+        const routine = activeTemplateRef.current;
+        await saveWorkoutProgress(snapshot.date, snapshot.memo, snapshot.exercises, snapshot.waterConsumed, routine?.totalDays || 0);
+      });
+    saveQueueRef.current = pendingSave.catch(error => {
+      console.error('운동 진행 자동 저장 실패:', error);
+    });
+
+    AsyncStorage.setItem('workout_sync_time', Date.now().toString()).catch(() => undefined);
+    AsyncStorage.setItem('today_workout_progress', JSON.stringify({ date: dbDateString, exercises: nextExercises })).catch(() => undefined);
+    DeviceEventEmitter.emit('syncWorkoutProgress', nextExercises);
+    return saveQueueRef.current;
+  };
+
+  const drinkWater = () => {
+    const nextValue = Math.min(waterConsumedRef.current + 100, waterGoal);
+    if (nextValue === waterConsumedRef.current) return;
+    commitWaterConsumed(nextValue);
+    saveDraftSnapshot();
+  };
+  const waterLeft = Math.max(waterGoal - waterConsumed, 0);
   const waterProgressPercent = Math.min((waterConsumed / waterGoal) * 100, 100);
 
   const toggleTimer = () => {
@@ -189,15 +268,17 @@ export default function TodayWorkoutScreen() {
     } else { setTimeLeft(newBase); }
   };
 
-  const toggleCheck = (id) => { 
-    setExercises(exercises.map(ex => {
+  const toggleCheck = (id) => {
+    const updated = exercisesRef.current.map(ex => {
       if (ex.id === id) return { ...ex, isChecked: !ex.isChecked };
       return ex;
-    })); 
+    });
+    commitExercises(updated);
+    saveDraftSnapshot(updated);
   };
-  
+
   const updateExercise = (id, field, value) => {
-    const updatedExercises = exercises.map(ex => {
+    const updatedExercises = exercisesRef.current.map(ex => {
       if (ex.id === id) {
         let newType = ex.type;
         if (field === 'name') {
@@ -208,7 +289,8 @@ export default function TodayWorkoutScreen() {
       }
       return ex;
     });
-    setExercises(updatedExercises);
+    commitExercises(updatedExercises);
+    saveDraftSnapshot(updatedExercises);
   };
 
   const handleSelectExerciseFromSearch = (selectedName) => {
@@ -217,10 +299,14 @@ export default function TodayWorkoutScreen() {
     setSearchKeyword('');
   };
 
-  const deleteExercise = (id) => { setExercises(exercises.filter(ex => ex.id !== id)); };
+  const deleteExercise = (id) => {
+    const updated = exercisesRef.current.filter(ex => ex.id !== id);
+    commitExercises(updated);
+    saveDraftSnapshot(updated);
+  };
 
   const moveExercise = (id, direction) => {
-    setExercises(prevExercises => {
+    const prevExercises = exercisesRef.current;
       const index = prevExercises.findIndex(ex => ex.id === id);
       if (index < 0) return prevExercises; 
       const newExercises = [...prevExercises];
@@ -229,33 +315,47 @@ export default function TodayWorkoutScreen() {
       } else if (direction === 1 && index < newExercises.length - 1) {
         const temp = newExercises[index]; newExercises[index] = newExercises[index + 1]; newExercises[index + 1] = temp;
       }
+      commitExercises(newExercises);
+      saveDraftSnapshot(newExercises);
       return newExercises;
-    });
   };
 
-  const addAdhocExercise = () => { 
-    setExercises([...exercises, { id: Date.now(), name: '', weight: '', reps: '', sets: '', speed: '', time: '', distance: '', type: 'WEIGHT', isChecked: false }]); 
+  const addAdhocExercise = () => {
+    const updated = [...exercisesRef.current, { id: Date.now(), name: '', weight: '', reps: '', sets: '', speed: '', time: '', distance: '', type: 'WEIGHT', isChecked: false }];
+    commitExercises(updated);
+    saveDraftSnapshot(updated);
   };
 
   const handleSaveWorkout = async () => {
-    const checkedExercises = exercises.filter(ex => ex.isChecked);
+    const checkedExercises = exercisesRef.current.filter(ex => ex.isChecked);
     if (checkedExercises.length === 0) return showAlert('안내', '체크(완료)된 운동이 없습니다.', 'info');
     if (checkedExercises.some(ex => !ex.name || ex.name.trim() === '')) return showAlert('입력 확인', '체크된 기구의 운동 이름을 입력해 주세요.', 'info');
 
+    finalizingRef.current = true;
     try {
-      await saveWorkoutLog(dbDateString, 'COMPLETED', memo, checkedExercises, waterConsumed);
-      
+      await saveQueueRef.current.catch(() => undefined);
+      await completeWorkoutLog(dbDateString, memoRef.current, checkedExercises, waterConsumedRef.current);
+
       if (!isWorkoutCompleted && activeTemplateRef.current) {
         const nextIndex = (currentRoutineIndexRef.current + 1) % activeTemplateRef.current.totalDays;
         await updateSetting('current_routine_day_index', nextIndex);
-        currentRoutineIndexRef.current = nextIndex; 
+        currentRoutineIndexRef.current = nextIndex;
       }
 
-      showAlert('운동 완료! 🎉', '운동 기록과 물 섭취량이 멋지게 저장되었습니다.', 'info');
-      clearTimer(); 
-      isDataLoadedRef.current = false; 
-      loadTodayData(true); 
-    } catch (error) { showAlert('오류', '저장에 실패했습니다.', 'info'); }
+      setIsWorkoutCompleted(true);
+      showAlert('운동 완료! 🎉', '운동 기록과 물 섭취량이 저장되었습니다.', 'info');
+      clearTimer();
+      isDataLoadedRef.current = false;
+      await AsyncStorage.removeItem('today_workout_progress');
+      await AsyncStorage.removeItem('workout_sync_time');
+      DeviceEventEmitter.emit('syncWorkoutProgress', null);
+      await loadTodayData(true);
+    } catch (error) {
+      finalizingRef.current = false;
+      console.error('운동 완료 저장 실패:', error);
+      showAlert('오류', '저장에 실패했습니다. 진행 상태는 다시 저장을 시도합니다.', 'info');
+      saveDraftSnapshot(exercisesRef.current);
+    }
   };
 
   const handleToggleRest = () => {
@@ -269,7 +369,11 @@ export default function TodayWorkoutScreen() {
           await saveRestDayLog(dbDateString, memo, waterConsumed);
           showAlert('휴식 완료', '오늘은 푹 쉬고 내일 다시 화이팅입니다! ☕', 'info');
           clearTimer();
-          isDataLoadedRef.current = false; loadTodayData(true);
+          isDataLoadedRef.current = false;
+          // [수정] 휴식 시 임시 저장 데이터 정리
+          await AsyncStorage.removeItem('today_workout_progress');
+          await AsyncStorage.removeItem('workout_sync_time');
+          loadTodayData(true);
         } catch (error) { showAlert('오류', '휴식 기록 저장에 실패했습니다.', 'info'); }
       });
     }
@@ -407,7 +511,7 @@ export default function TodayWorkoutScreen() {
             <View style={[styles.emptyCard, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: theme.borderColor}]}><Text style={[styles.emptyText, {color: theme.textSub}]}>오늘은 푹 쉬며 회복하는 날입니다. ☕</Text></View>
           ) : exercises.length > 0 ? (
             exercises.map((exercise, index) => (
-              <View key={exercise.id} style={[styles.card, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: theme.borderColor}, exercise.isChecked && {backgroundColor: isDarkMode ? '#14161A' : '#FAFAFA', borderColor: theme.inputBorder}]}>
+              <View key={exercise.id} style={[styles.card, {backgroundColor: theme.cardBg, borderRadius: theme.radius, borderColor: theme.borderColor}, exercise.isChecked && {backgroundColor: isDarkMode ? '#14161A' : '#FAFAFA', borderColor: isDarkMode ? '#00E5FF' : '#FF5C00', borderWidth: 2}]} >
                 <View style={styles.cardHeader}>
                   <TouchableOpacity onPress={() => toggleCheck(exercise.id)} style={styles.checkboxContainer}>
                     <Ionicons name={exercise.isChecked ? "checkmark-circle" : "ellipse-outline"} size={30} color={exercise.isChecked ? theme.success : theme.inputBorder} />
@@ -456,7 +560,7 @@ export default function TodayWorkoutScreen() {
           
           <View style={styles.memoContainer}>
             <Text style={[styles.memoTitle, {color: theme.textSub}]}>오늘의 메모</Text>
-            <TextInput style={[styles.memoInput, {backgroundColor: theme.cardBg, borderRadius: theme.radius, color: theme.textMain, borderColor: theme.borderColor}]} placeholder="컨디션이나 특이사항을 적어주세요." value={memo} onChangeText={setMemo} multiline={true} placeholderTextColor={theme.textSub} />
+            <TextInput style={[styles.memoInput, {backgroundColor: theme.cardBg, borderRadius: theme.radius, color: theme.textMain, borderColor: theme.borderColor}]} placeholder="컨디션이나 특이사항을 적어주세요." value={memo} onChangeText={(value) => { commitMemo(value); saveDraftSnapshot(); }} multiline={true} placeholderTextColor={theme.textSub} />
           </View>
           
           {!isRestDay && (
